@@ -1,0 +1,16 @@
+[package]
+name = "zodiakos"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+bevy = "0.14"
+rand = "0.8"
+
+# Enable optimizations for dependencies (incl. Bevy), but not for our code:
+[profile.dev]
+opt-level = 1
+
+# Enable high optimizations for better performance
+[profile.dev.package."*"]
+opt-level = 3

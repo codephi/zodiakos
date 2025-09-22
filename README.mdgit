@@ -1,0 +1,19 @@
+# zodiakos
+initgit
+add
+README.mdgit
+commit
+-m
+first commit
+git
+branch
+-M
+maingit
+remote
+add
+origin
+git@github.com:codephi/zodiakos.gitgit
+push
+-u
+origin
+main
