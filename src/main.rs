@@ -268,6 +268,12 @@ struct ResourcePanel;
 #[derive(Component)]
 struct SelectedStar;
 
+#[derive(Component)]
+struct StarSprite;
+
+#[derive(Component)]
+struct StarBorder;
+
 // Resources
 #[derive(Resource, Default)]
 struct DragState {
@@ -408,6 +414,7 @@ fn main() {
                 update_dragging_line,
                 update_connections,
                 collect_resources_system,
+                update_star_borders,
                 update_ui,
             ),
         )
@@ -804,6 +811,10 @@ fn handle_mouse_input(
                             start_star.connections_to.push(target_entity);
                         }
                         
+                        // Mark stars as needing borders
+                        commands.entity(start_star_entity).insert(StarBorder);
+                        commands.entity(target_entity).insert(StarBorder);
+                        
                         // Create a connection
                         commands.spawn((
                             MaterialMesh2dBundle {
@@ -940,12 +951,25 @@ fn connection_selection_system(
     // Check for delete key press on selected connection
     if keyboard.just_pressed(KeyCode::Delete) {
         if let Some(selected) = selected_connection {
+            let mut from_has_no_connections = false;
+            let mut to_has_no_connections = false;
+            
             // Remove connection from stars
             if let Ok(mut from_star) = stars.get_mut(selected.from) {
                 from_star.connections_to.retain(|&x| x != selected.to);
+                from_has_no_connections = from_star.connections_to.is_empty() && from_star.connections_from.is_empty();
             }
             if let Ok(mut to_star) = stars.get_mut(selected.to) {
                 to_star.connections_from.retain(|&x| x != selected.from);
+                to_has_no_connections = to_star.connections_to.is_empty() && to_star.connections_from.is_empty();
+            }
+            
+            // Remove StarBorder component if star has no more connections
+            if from_has_no_connections {
+                commands.entity(selected.from).remove::<StarBorder>();
+            }
+            if to_has_no_connections {
+                commands.entity(selected.to).remove::<StarBorder>();
             }
             
             // Delete the connection entity
@@ -1104,6 +1128,51 @@ fn collect_resources_system(
                     }
                 }
             }
+        }
+    }
+}
+
+fn update_star_borders(
+    mut commands: Commands,
+    star_query: Query<(Entity, &Transform, &Star), With<StarBorder>>,
+    border_query: Query<Entity, (With<StarBorder>, Without<Star>)>,
+    mut meshes: ResMut<Assets<Mesh>>,
+    mut materials: ResMut<Assets<ColorMaterial>>,
+) {
+    // Remove existing borders
+    for border_entity in &border_query {
+        commands.entity(border_entity).despawn();
+    }
+    
+    // Create new borders for stars with connections
+    for (entity, transform, star) in &star_query {
+        let has_connections = !star.connections_from.is_empty() || !star.connections_to.is_empty();
+        
+        if has_connections {
+            // Create a border ring around the star
+            commands.spawn((
+                MaterialMesh2dBundle {
+                    mesh: meshes.add(Circle::new(30.0)).into(),
+                    material: materials.add(ColorMaterial::from(Color::srgba(0.2, 1.0, 0.2, 0.3))),
+                    transform: Transform::from_xyz(transform.translation.x, transform.translation.y, 0.5),
+                    ..default()
+                },
+                StarBorder,
+            ));
+            
+            // Also spawn a second ring for better visibility
+            commands.spawn((
+                MaterialMesh2dBundle {
+                    mesh: meshes.add(Circle::new(32.0)).into(),
+                    material: materials.add(ColorMaterial::from(Color::srgba(0.1, 0.8, 0.1, 0.2))),
+                    transform: Transform::from_xyz(transform.translation.x, transform.translation.y, 0.4),
+                    ..default()
+                },
+                StarBorder,
+            ));
+        } else {
+            // Remove StarBorder component if no connections
+            commands.entity(entity).remove::<StarBorder>();
         }
     }
 }
