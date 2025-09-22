@@ -4,6 +4,7 @@ use bevy::{
     core_pipeline::{bloom::*, tonemapping::Tonemapping},
     ecs::system::ParamSet,
     prelude::*,
+    render::mesh::Indices,
     sprite::MaterialMesh2dBundle,
     window::PrimaryWindow,
 };
@@ -2088,8 +2089,8 @@ fn create_constellation_visual(
     constellation: &Constellation,
     stars_query: &Query<(Entity, &Star, &Transform)>,
     commands: &mut Commands,
-    _meshes: &mut ResMut<Assets<Mesh>>,
-    _materials: &mut ResMut<Assets<ColorMaterial>>,
+    meshes: &mut ResMut<Assets<Mesh>>,
+    materials: &mut ResMut<Assets<ColorMaterial>>,
 ) {
     // The constellation stars are already in the correct order from the cycle detection
     // So we just need to connect them in that exact order
@@ -2106,7 +2107,56 @@ fn create_constellation_visual(
         return;
     }
     
-    // Draw colored lines connecting the stars in the exact cycle order
+    // Create a proper mesh for the constellation polygon
+    let mut mesh = Mesh::new(
+        bevy::render::mesh::PrimitiveTopology::TriangleList,
+        bevy::render::render_asset::RenderAssetUsages::RENDER_WORLD,
+    );
+    
+    // Create vertices for the polygon - we'll use a triangle fan from the center
+    let center = star_positions.iter().fold(Vec2::ZERO, |acc, &p| acc + p) / star_positions.len() as f32;
+    
+    let mut vertices = vec![[center.x, center.y, 0.0]]; // Center vertex
+    for &pos in &star_positions {
+        vertices.push([pos.x, pos.y, 0.0]);
+    }
+    
+    // Create triangle indices for a triangle fan
+    let mut indices = Vec::new();
+    for i in 0..star_positions.len() as u32 {
+        let next = (i + 1) % star_positions.len() as u32;
+        indices.push(0); // Center
+        indices.push(i + 1);
+        indices.push(next + 1);
+    }
+    
+    // Set mesh attributes
+    mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, vertices);
+    mesh.insert_indices(Indices::U32(indices));
+    
+    // Create UV coordinates for proper texturing (if needed)
+    let mut uvs = vec![[0.5, 0.5]]; // Center UV
+    for i in 0..star_positions.len() {
+        let angle = (i as f32 * 2.0 * std::f32::consts::PI) / star_positions.len() as f32;
+        uvs.push([0.5 + 0.5 * angle.cos(), 0.5 + 0.5 * angle.sin()]);
+    }
+    mesh.insert_attribute(Mesh::ATTRIBUTE_UV_0, uvs);
+    
+    // Create the constellation background with the mesh
+    let mesh_handle = meshes.add(mesh);
+    let material_handle = materials.add(ColorMaterial::from(constellation.color.with_alpha(0.2)));
+    
+    commands.spawn((
+        MaterialMesh2dBundle {
+            mesh: mesh_handle.into(),
+            material: material_handle,
+            transform: Transform::from_translation(Vec3::new(0.0, 0.0, -1.0)), // Behind everything
+            ..default()
+        },
+        ConstellationMarker { id: constellation.id },
+    ));
+    
+    // Draw glowing colored lines connecting the stars in the exact cycle order
     for i in 0..constellation.stars.len() {
         let from_entity = constellation.stars[i];
         let to_entity = constellation.stars[(i + 1) % constellation.stars.len()];
@@ -2123,16 +2173,17 @@ fn create_constellation_visual(
             let distance = diff.length();
             let angle = diff.y.atan2(diff.x);
             
-            // Create a glowing, colored line for the constellation edge
+            // Create multiple layers for glow effect
+            // Outer glow - very wide and transparent
             commands.spawn((
                 SpriteBundle {
                     sprite: Sprite {
-                        color: constellation.color.with_alpha(0.8), // More visible
-                        custom_size: Some(Vec2::new(distance, 12.0)), // Wider than normal connections
+                        color: constellation.color.with_alpha(0.15),
+                        custom_size: Some(Vec2::new(distance, 30.0)),
                         ..default()
                     },
                     transform: Transform {
-                        translation: midpoint.extend(-0.5), // Behind connections but above background
+                        translation: midpoint.extend(-0.3),
                         rotation: Quat::from_rotation_z(angle),
                         ..default()
                     },
@@ -2141,16 +2192,34 @@ fn create_constellation_visual(
                 ConstellationMarker { id: constellation.id },
             ));
             
-            // Add glow effect with a second, wider, more transparent sprite
+            // Middle glow
             commands.spawn((
                 SpriteBundle {
                     sprite: Sprite {
                         color: constellation.color.with_alpha(0.3),
-                        custom_size: Some(Vec2::new(distance, 24.0)), // Even wider for glow
+                        custom_size: Some(Vec2::new(distance, 16.0)),
                         ..default()
                     },
                     transform: Transform {
-                        translation: midpoint.extend(-0.6), // Slightly behind the main line
+                        translation: midpoint.extend(-0.2),
+                        rotation: Quat::from_rotation_z(angle),
+                        ..default()
+                    },
+                    ..default()
+                },
+                ConstellationMarker { id: constellation.id },
+            ));
+            
+            // Core line - bright and solid
+            commands.spawn((
+                SpriteBundle {
+                    sprite: Sprite {
+                        color: constellation.color.with_alpha(0.9),
+                        custom_size: Some(Vec2::new(distance, 6.0)),
+                        ..default()
+                    },
+                    transform: Transform {
+                        translation: midpoint.extend(-0.1),
                         rotation: Quat::from_rotation_z(angle),
                         ..default()
                     },
@@ -2159,43 +2228,6 @@ fn create_constellation_visual(
                 ConstellationMarker { id: constellation.id },
             ));
         }
-    }
-    
-    // Calculate the actual center of the polygon formed by the cycle
-    let center = star_positions.iter().fold(Vec2::ZERO, |acc, &p| acc + p) / star_positions.len() as f32;
-    
-    // Calculate the size needed for the background based on the actual constellation shape
-    let mut max_distance = 0.0;
-    for pos in &star_positions {
-        let dist = pos.distance(center);
-        if dist > max_distance {
-            max_distance = dist;
-        }
-    }
-    
-    // Create triangular fill segments from center to each edge for a filled polygon effect
-    for i in 0..star_positions.len() {
-        let p1 = star_positions[i];
-        let p2 = star_positions[(i + 1) % star_positions.len()];
-        let triangle_center = (p1 + p2 + center) / 3.0;
-        
-        // Create a triangular sprite to fill the space
-        commands.spawn((
-            SpriteBundle {
-                sprite: Sprite {
-                    color: constellation.color.with_alpha(0.1), // Very transparent fill
-                    custom_size: Some(Vec2::new(p1.distance(p2), p1.distance(center) / 2.0)),
-                    ..default()
-                },
-                transform: Transform {
-                    translation: triangle_center.extend(-0.9), // Far behind everything
-                    rotation: Quat::from_rotation_z((p2 - p1).y.atan2((p2 - p1).x)),
-                    ..default()
-                },
-                ..default()
-            },
-            ConstellationMarker { id: constellation.id },
-        ));
     }
 }
 
