@@ -1852,7 +1852,9 @@ fn update_ui(
                 // Check if star is in a constellation
                 let constellation_bonus = check_constellation_bonuses(selected_entity, &constellation_tracker);
                 if constellation_bonus > 1.0 {
-                    info_text.push_str("\n⭐ CONSTELLATION BONUS: 2x Production! ⭐\n\n");
+                    info_text.push_str("\n⭐ CONSTELLATION BONUS: 2x Production! ⭐\n");
+                    info_text.push_str("This star is part of a constellation.\n");
+                    info_text.push_str("No new constellations can be formed with this star.\n\n");
                 }
                 
                 if specialization == Specialization::None {
@@ -2056,7 +2058,15 @@ fn detect_and_create_constellations(
             sorted_cycle == sorted_existing
         });
         
-        if is_new {
+        // Check if any star in this cycle is already part of another constellation
+        let has_existing_constellation_star = cycle_entities.iter().any(|&star_entity| {
+            constellation_tracker.constellations.iter().any(|existing_constellation| {
+                existing_constellation.stars.contains(&star_entity)
+            })
+        });
+        
+        // Only create constellation if it's new AND no stars are already in other constellations
+        if is_new && !has_existing_constellation_star {
             // Create a new constellation with varied colors
             let hue = (constellation_tracker.next_id as f32 * 137.5) % 360.0; // Golden angle for color distribution
             let color = Color::hsla(
@@ -2080,6 +2090,12 @@ fn detect_and_create_constellations(
             constellation_tracker.constellations.push(constellation);
             
             info!("New constellation formed with {} stars!", cycle_entities.len());
+        } else if !is_new {
+            // Constellation already exists
+            debug!("Cycle detected but constellation already exists");
+        } else if has_existing_constellation_star {
+            // Can't create because stars are already in other constellations
+            info!("Cannot form new constellation: one or more stars already belong to existing constellations");
         }
     }
 }
