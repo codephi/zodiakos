@@ -7,12 +7,21 @@ use bevy::{
     },
     ecs::system::ParamSet,
     prelude::*,
+    render::{
+        mesh::{Indices, MeshVertexAttribute},
+        render_asset::RenderAssetUsages,
+        render_resource::{PrimitiveTopology, VertexFormat},
+    },
     text::{TextColor, TextFont},
     ui::Node,
     window::PrimaryWindow,
 };
 use rand::prelude::*;
 use std::collections::HashMap;
+
+// Import the ColoredMesh2d components from mesh2d_manual module
+mod mesh2d_manual;
+use mesh2d_manual::{ColoredMesh2d, ColoredMesh2dPlugin, MeshHandle};
 
 // Specialization types for stars
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -235,32 +244,38 @@ fn calculate_distance_to_nearest_storage(
         return None;
     }
     visited.push(star_entity);
-    
+
     if let Ok(star) = star_query.get(star_entity) {
         // If this star is a storage hub, route distance is 0
         if star.is_storage_hub {
             return Some(0);
         }
-        
+
         // Check all connection routes to find shortest path
         let mut min_route_distance = None;
-        
+
         // Check routes through incoming connections
         for &connected_entity in &star.connections_from {
-            if let Some(dist) = calculate_distance_to_nearest_storage(connected_entity, star_query, visited) {
+            if let Some(dist) =
+                calculate_distance_to_nearest_storage(connected_entity, star_query, visited)
+            {
                 let route_dist = dist + 1; // Add 1 hop for this connection
-                min_route_distance = Some(min_route_distance.map_or(route_dist, |d: u32| d.min(route_dist)));
+                min_route_distance =
+                    Some(min_route_distance.map_or(route_dist, |d: u32| d.min(route_dist)));
             }
         }
-        
+
         // Check routes through outgoing connections
         for &connected_entity in &star.connections_to {
-            if let Some(dist) = calculate_distance_to_nearest_storage(connected_entity, star_query, visited) {
+            if let Some(dist) =
+                calculate_distance_to_nearest_storage(connected_entity, star_query, visited)
+            {
                 let route_dist = dist + 1; // Add 1 hop for this connection
-                min_route_distance = Some(min_route_distance.map_or(route_dist, |d: u32| d.min(route_dist)));
+                min_route_distance =
+                    Some(min_route_distance.map_or(route_dist, |d: u32| d.min(route_dist)));
             }
         }
-        
+
         min_route_distance
     } else {
         None
@@ -268,20 +283,26 @@ fn calculate_distance_to_nearest_storage(
 }
 
 // Find all cycles of 3 or more stars in the connection graph
-fn find_cycles_in_graph(
-    stars: &Query<(Entity, &Star)>,
-    min_cycle_size: usize,
-) -> Vec<Vec<Entity>> {
+fn find_cycles_in_graph(stars: &Query<(Entity, &Star)>, min_cycle_size: usize) -> Vec<Vec<Entity>> {
     let mut cycles = Vec::new();
     let mut visited = Vec::new();
-    
+
     for (entity, _star) in stars.iter() {
         if !visited.contains(&entity) {
             let mut path = Vec::new();
-            find_cycles_dfs(entity, entity, &mut path, &mut visited, &mut cycles, stars, min_cycle_size, None);
+            find_cycles_dfs(
+                entity,
+                entity,
+                &mut path,
+                &mut visited,
+                &mut cycles,
+                stars,
+                min_cycle_size,
+                None,
+            );
         }
     }
-    
+
     // Remove duplicate cycles (same nodes in different order)
     let mut unique_cycles = Vec::new();
     for cycle in cycles {
@@ -295,7 +316,7 @@ fn find_cycles_in_graph(
             unique_cycles.push(cycle);
         }
     }
-    
+
     unique_cycles
 }
 
@@ -311,29 +332,38 @@ fn find_cycles_dfs(
 ) {
     path.push(current);
     visited.push(current);
-    
+
     if let Ok((_entity, star)) = stars.get(current) {
         // Check all connected stars
         let mut connected: Vec<Entity> = star.connections_to.clone();
         connected.extend(star.connections_from.clone());
-        
+
         for &next in &connected {
             // Skip parent to avoid immediate backtracking
             if Some(next) == parent {
                 continue;
             }
-            
+
             // If we found the start and path is long enough, we have a cycle
             if next == start && path.len() >= min_size {
                 cycles.push(path.clone());
-            } 
+            }
             // Continue DFS if not visited in current path
             else if !path.contains(&next) {
-                find_cycles_dfs(next, start, path, visited, cycles, stars, min_size, Some(current));
+                find_cycles_dfs(
+                    next,
+                    start,
+                    path,
+                    visited,
+                    cycles,
+                    stars,
+                    min_size,
+                    Some(current),
+                );
             }
         }
     }
-    
+
     path.pop();
 }
 
@@ -341,9 +371,9 @@ fn find_cycles_dfs(
 // Stars need supply routes to maintain efficiency - the longer the route, the less efficient
 fn production_rate_modifier_from_distance(route_distance: Option<u32>) -> f32 {
     match route_distance {
-        None => 0.1,    // No route to storage hub: 10% production (isolated)
-        Some(0) => 1.0, // Is a storage hub: 100% production
-        Some(1) => 0.9, // 1 connection hop: 90% production
+        None => 0.1,     // No route to storage hub: 10% production (isolated)
+        Some(0) => 1.0,  // Is a storage hub: 100% production
+        Some(1) => 0.9,  // 1 connection hop: 90% production
         Some(2) => 0.75, // 2 connection hops: 75% production
         Some(3) => 0.6,  // 3 connection hops: 60% production
         Some(4) => 0.45, // 4 connection hops: 45% production
@@ -359,18 +389,18 @@ struct Star {
     name: String,
     resources: HashMap<ResourceType, f32>,
     max_resources: HashMap<ResourceType, f32>,
-    production_rate: f32,  // Resources per second
+    production_rate: f32, // Resources per second
     is_colonized: bool,
     is_home_star: bool,
     specialization: Specialization, // None = extraction; other = specialization (stops extraction)
-    specialization_level: u8,      // Level (no limit, follows Fibonacci for connections)
+    specialization_level: u8,       // Level (no limit, follows Fibonacci for connections)
     units: Vec<Unit>,               // Units produced if specialized
     building_state: BuildingState,  // Current construction/upgrade state
     connections_from: Vec<Entity>,  // List of stars connected TO this star
     connections_to: Vec<Entity>,    // List of stars this star connects TO
     base_color: Color,              // Base color based on resources
     storage_capacity: HashMap<ResourceType, f32>, // Storage capacity if it's a storage hub
-    is_storage_hub: bool,          // Whether this star is a storage hub
+    is_storage_hub: bool,           // Whether this star is a storage hub
 }
 
 #[derive(Component)]
@@ -422,9 +452,6 @@ struct ConstellationMarker {
     id: u32,
 }
 
-// Marker for constellation 2D mesh
-#[derive(Component)]
-struct ConstellationMesh2d;
 
 #[derive(Component)]
 struct ConfigMenu;
@@ -593,7 +620,7 @@ fn generate_star_resources(
 
 fn main() {
     App::new()
-        .add_plugins(DefaultPlugins)
+        .add_plugins((DefaultPlugins, ColoredMesh2dPlugin))
         .init_resource::<DragState>()
         .init_resource::<PlayerResources>()
         .init_resource::<ConstellationTracker>()
@@ -622,9 +649,7 @@ fn main() {
         .run();
 }
 
-fn setup(
-    mut commands: Commands,
-) {
+fn setup(mut commands: Commands) {
     // Camera with HDR and Bloom
     commands.spawn((
         Camera2d,
@@ -661,7 +686,7 @@ fn setup(
     positions.push(home_pos);
 
     let (_home_resources, home_max) = generate_star_resources(&mut rng, true);
-    
+
     // Calculate storage capacity (10% of max capacity for each resource)
     let mut storage_capacity = HashMap::new();
     let mut storage_resources = HashMap::new();
@@ -671,35 +696,37 @@ fn setup(
         // Start with 10% of storage capacity filled
         storage_resources.insert(*resource_type, capacity * 0.1);
     }
-    
+
     // Home star has a special golden color
     let home_color = Color::srgba(4.0, 3.5, 0.5, 1.0);
-    let _home_star = commands.spawn((
-        Sprite {
-            color: home_color.with_alpha(0.9), // Slight transparency for softer edges
-            custom_size: Some(Vec2::splat(50.0)),
-            ..default()
-        },
-        Transform::from_xyz(home_pos.x, home_pos.y, 1.0),
-        Star {
-            id: 0,
-            name: "Sol System (Storage Hub)".to_string(),
-            resources: storage_resources, // Use storage resources instead
-            max_resources: home_max.clone(),
-            production_rate: 2.0,
-            is_colonized: true,
-            is_home_star: true,
-            specialization: Specialization::Storage, // Set as Storage hub
-            specialization_level: 1,
-            units: vec![],
-            building_state: BuildingState::Ready,
-            connections_from: vec![],
-            connections_to: vec![],
-            base_color: home_color,
-            storage_capacity,
-            is_storage_hub: true,
-        },
-    )).id();
+    let _home_star = commands
+        .spawn((
+            Sprite {
+                color: home_color.with_alpha(0.9), // Slight transparency for softer edges
+                custom_size: Some(Vec2::splat(50.0)),
+                ..default()
+            },
+            Transform::from_xyz(home_pos.x, home_pos.y, 1.0),
+            Star {
+                id: 0,
+                name: "Sol System (Storage Hub)".to_string(),
+                resources: storage_resources, // Use storage resources instead
+                max_resources: home_max.clone(),
+                production_rate: 2.0,
+                is_colonized: true,
+                is_home_star: true,
+                specialization: Specialization::Storage, // Set as Storage hub
+                specialization_level: 1,
+                units: vec![],
+                building_state: BuildingState::Ready,
+                connections_from: vec![],
+                connections_to: vec![],
+                base_color: home_color,
+                storage_capacity,
+                is_storage_hub: true,
+            },
+        ))
+        .id();
 
     // Generate other stars
     for i in 1..num_stars {
@@ -909,10 +936,7 @@ fn setup(
 fn star_hover_system(
     windows: Query<&Window>,
     camera_q: Query<(&Camera, &GlobalTransform)>,
-    mut star_query: Query<
-        (&Transform, &mut Sprite, Entity, &Star),
-        Without<SelectedStar>,
-    >,
+    mut star_query: Query<(&Transform, &mut Sprite, Entity, &Star), Without<SelectedStar>>,
     drag_state: Res<DragState>,
 ) {
     let Ok(window) = windows.get_single() else {
@@ -1328,10 +1352,7 @@ fn connection_selection_system(
 fn collect_resources_system(
     time: Res<Time>,
     mut connection_query: Query<&mut Connection>,
-    mut star_queries: ParamSet<(
-        Query<&mut Star>,
-        Query<&Star>,
-    )>,
+    mut star_queries: ParamSet<(Query<&mut Star>, Query<&Star>)>,
     mut player_resources: ResMut<PlayerResources>,
     constellation_tracker: Res<ConstellationTracker>,
 ) {
@@ -1374,10 +1395,14 @@ fn collect_resources_system(
                 let mut visited = Vec::new();
                 let distance = {
                     let star_readonly = star_queries.p1();
-                    calculate_distance_to_nearest_storage(connection.to, &star_readonly, &mut visited)
+                    calculate_distance_to_nearest_storage(
+                        connection.to,
+                        &star_readonly,
+                        &mut visited,
+                    )
                 };
                 let distance_modifier = production_rate_modifier_from_distance(distance);
-                
+
                 // Then collect resources from the connected star
                 if let Ok(mut star) = star_queries.p0().get_mut(connection.to) {
                     // Only produce if building is ready
@@ -1386,15 +1411,22 @@ fn collect_resources_system(
                     }
 
                     // Only collect resources if star is not specialized for something other than storage
-                    if star.specialization == Specialization::None || star.specialization == Specialization::Storage {
+                    if star.specialization == Specialization::None
+                        || star.specialization == Specialization::Storage
+                    {
                         // Check if star is in a constellation for bonus
-                        let constellation_bonus = check_constellation_bonuses(connection.to, &constellation_tracker);
-                        let production_rate = star.production_rate * distance_modifier * constellation_bonus;
+                        let constellation_bonus =
+                            check_constellation_bonuses(connection.to, &constellation_tracker);
+                        let production_rate =
+                            star.production_rate * distance_modifier * constellation_bonus;
                         for (resource_type, amount) in star.resources.iter_mut() {
                             let collection_amount = (production_rate * 5.0).min(*amount);
                             if collection_amount > 0.0 {
                                 *amount -= collection_amount;
-                                *player_resources.resources.entry(*resource_type).or_insert(0.0) += collection_amount;
+                                *player_resources
+                                    .resources
+                                    .entry(*resource_type)
+                                    .or_insert(0.0) += collection_amount;
                             }
                         }
                     } else {
@@ -1507,11 +1539,7 @@ fn update_star_borders(
                     custom_size: Some(Vec2::new(60.0, 60.0)),
                     ..default()
                 },
-                Transform::from_xyz(
-                    transform.translation.x,
-                    transform.translation.y,
-                    0.5,
-                ),
+                Transform::from_xyz(transform.translation.x, transform.translation.y, 0.5),
                 StarBorder,
             ));
 
@@ -1522,11 +1550,7 @@ fn update_star_borders(
                     custom_size: Some(Vec2::new(64.0, 64.0)),
                     ..default()
                 },
-                Transform::from_xyz(
-                    transform.translation.x,
-                    transform.translation.y,
-                    0.4,
-                ),
+                Transform::from_xyz(transform.translation.x, transform.translation.y, 0.4),
                 StarBorder,
             ));
         } else {
@@ -1602,13 +1626,11 @@ fn update_bloom_settings(
 
         // Threshold controls (W/S)
         if keyboard.just_pressed(KeyCode::KeyW) {
-            bloom.prefilter.threshold =
-                (bloom.prefilter.threshold + 0.05).min(1.0);
+            bloom.prefilter.threshold = (bloom.prefilter.threshold + 0.05).min(1.0);
             changed = true;
         }
         if keyboard.just_pressed(KeyCode::KeyS) {
-            bloom.prefilter.threshold =
-                (bloom.prefilter.threshold - 0.05).max(0.0);
+            bloom.prefilter.threshold = (bloom.prefilter.threshold - 0.05).max(0.0);
             changed = true;
         }
 
@@ -1639,13 +1661,15 @@ fn update_bloom_settings(
                 *text = format!(
                     "Threshold: {:.2} (W/S to adjust)",
                     bloom.prefilter.threshold
-                ).into();
+                )
+                .into();
             }
             if let Ok(mut text) = boost_text.get_single_mut() {
                 *text = format!(
                     "Low Freq Boost: {:.1} (E/D to adjust)",
                     bloom.low_frequency_boost
-                ).into();
+                )
+                .into();
             }
         }
     }
@@ -1797,12 +1821,17 @@ fn update_ui(
 
                 // Show route distance to storage hub and production efficiency
                 let mut visited = Vec::new();
-                let route_distance = calculate_distance_to_nearest_storage(selected_entity, &star_queries.p0(), &mut visited);
+                let route_distance = calculate_distance_to_nearest_storage(
+                    selected_entity,
+                    &star_queries.p0(),
+                    &mut visited,
+                );
                 let efficiency_modifier = production_rate_modifier_from_distance(route_distance);
-                
+
                 if let Some(hops) = route_distance {
                     info_text.push_str(&format!("Supply Route Distance: {} connection(s)\n", hops));
-                    info_text.push_str(&format!("Route Status: {}\n", 
+                    info_text.push_str(&format!(
+                        "Route Status: {}\n",
                         match hops {
                             0 => "Storage Hub (Direct Supply)",
                             1 => "Adjacent to Storage (Optimal)",
@@ -1817,17 +1846,22 @@ fn update_ui(
                 }
 
                 // Check if star is in a constellation
-                let constellation_bonus = check_constellation_bonuses(selected_entity, &constellation_tracker);
+                let constellation_bonus =
+                    check_constellation_bonuses(selected_entity, &constellation_tracker);
                 if constellation_bonus > 1.0 {
                     info_text.push_str("\n⭐ CONSTELLATION BONUS: 2x Production! ⭐\n");
                     info_text.push_str("This star is part of a constellation.\n");
                     info_text.push_str("No new constellations can be formed with this star.\n\n");
                 }
-                
+
                 if specialization == Specialization::None {
-                    info_text.push_str(&format!("Base Production Rate: {:.1}/s\n", production_rate));
-                    info_text.push_str(&format!("Effective Production: {:.1}/s ({:.0}% efficiency)\n", 
-                        production_rate * efficiency_modifier * constellation_bonus, efficiency_modifier * constellation_bonus * 100.0));
+                    info_text
+                        .push_str(&format!("Base Production Rate: {:.1}/s\n", production_rate));
+                    info_text.push_str(&format!(
+                        "Effective Production: {:.1}/s ({:.0}% efficiency)\n",
+                        production_rate * efficiency_modifier * constellation_bonus,
+                        efficiency_modifier * constellation_bonus * 100.0
+                    ));
                 } else {
                     info_text.push_str("Production: SPECIALIZED\n");
 
@@ -1898,20 +1932,22 @@ fn update_ui(
                                 selected_star.specialization = spec;
                                 selected_star.specialization_level = 1; // Reset level when changing
                                 selected_star.units.clear();
-                                
+
                                 // If becoming a storage hub, set up storage capacity
                                 if spec == Specialization::Storage {
                                     selected_star.is_storage_hub = true;
                                     let max_resources_copy = selected_star.max_resources.clone();
                                     for (resource_type, max_value) in &max_resources_copy {
                                         let capacity = max_value * 10.0; // Storage hub has 10x capacity
-                                        selected_star.storage_capacity.insert(*resource_type, capacity);
+                                        selected_star
+                                            .storage_capacity
+                                            .insert(*resource_type, capacity);
                                     }
                                 } else {
                                     selected_star.is_storage_hub = false;
                                     selected_star.storage_capacity.clear();
                                 }
-                                
+
                                 let build_time = spec.build_time();
                                 selected_star.building_state = BuildingState::Building {
                                     timer: build_time,
@@ -1941,7 +1977,8 @@ fn update_ui(
             info.push_str("================\n\n");
 
             // Get connection details
-            if let Ok((_entity, connection, _transform)) = connection_query.get(selected_conn.entity)
+            if let Ok((_entity, connection, _transform)) =
+                connection_query.get(selected_conn.entity)
             {
                 // Get star names/IDs
                 let from_info = if let Ok(star) = star_queries.p0().get(connection.from) {
@@ -1996,8 +2033,10 @@ fn update_ui(
 
             *text = info.into();
         } else {
-            *text = "Click on a star to see details\nClick on a connection line to see connection info"
-                    .to_string().into();
+            *text =
+                "Click on a star to see details\nClick on a connection line to see connection info"
+                    .to_string()
+                    .into();
         }
     }
 }
@@ -2008,10 +2047,11 @@ fn detect_and_create_constellations(
     stars_simple: Query<(Entity, &Star)>,
     mut constellation_tracker: ResMut<ConstellationTracker>,
     mut commands: Commands,
+    mut meshes: ResMut<Assets<Mesh>>,
 ) {
     // Find all cycles of 3 or more stars
     let cycles = find_cycles_in_graph(&stars_simple, 3);
-    
+
     for cycle_entities in cycles {
         // Check if this constellation already exists
         let is_new = !constellation_tracker.constellations.iter().any(|c| {
@@ -2021,39 +2061,42 @@ fn detect_and_create_constellations(
             sorted_existing.sort_by_key(|e| e.index());
             sorted_cycle == sorted_existing
         });
-        
+
         // Check if any star in this cycle is already part of another constellation
         let has_existing_constellation_star = cycle_entities.iter().any(|&star_entity| {
-            constellation_tracker.constellations.iter().any(|existing_constellation| {
-                existing_constellation.stars.contains(&star_entity)
-            })
+            constellation_tracker
+                .constellations
+                .iter()
+                .any(|existing_constellation| existing_constellation.stars.contains(&star_entity))
         });
-        
+
         // Only create constellation if it's new AND no stars are already in other constellations
         if is_new && !has_existing_constellation_star {
             // Create a new constellation with varied colors
             let hue = (constellation_tracker.next_id as f32 * 137.5) % 360.0; // Golden angle for color distribution
             let color = Color::hsla(
-                hue,
-                0.7,  // Good saturation
-                0.6,  // Medium lightness 
+                hue, 0.7,  // Good saturation
+                0.6,  // Medium lightness
                 0.25, // Semi-transparent
             );
-            
+
             let constellation = Constellation {
                 id: constellation_tracker.next_id,
                 stars: cycle_entities.clone(),
                 color,
             };
-            
+
             constellation_tracker.next_id += 1;
-            
+
             // Create visual representation of the constellation
-            create_constellation_visual(&constellation, &stars_query, &mut commands);
-            
+            create_constellation_visual(&constellation, &stars_query, &mut commands, &mut meshes);
+
             constellation_tracker.constellations.push(constellation);
-            
-            info!("New constellation formed with {} stars!", cycle_entities.len());
+
+            info!(
+                "New constellation formed with {} stars!",
+                cycle_entities.len()
+            );
         } else if !is_new {
             // Constellation already exists
             debug!("Cycle detected but constellation already exists");
@@ -2064,76 +2107,119 @@ fn detect_and_create_constellations(
     }
 }
 
-// Create visual polygon for constellation
+// Create visual polygon for constellation using Mesh2d exactly like mesh2d_manual.rs
 fn create_constellation_visual(
     constellation: &Constellation,
     stars_query: &Query<(Entity, &Star, &Transform)>,
     commands: &mut Commands,
+    meshes: &mut Assets<Mesh>,
 ) {
     // The constellation stars are already in the correct order from the cycle detection
     // So we just need to connect them in that exact order
     let mut star_positions = Vec::new();
-    
+
     // Get positions in the exact order of the cycle
     for &star_entity in &constellation.stars {
         if let Ok((_, _star, transform)) = stars_query.get(star_entity) {
             star_positions.push(Vec2::new(transform.translation.x, transform.translation.y));
         }
     }
-    
+
     if star_positions.len() < 3 {
         return;
     }
-    
-    // Create a filled polygon using overlapping sprites to form triangular sections
-    // Calculate centroid for triangle fan center
-    let centroid = star_positions.iter().copied().reduce(|a, b| a + b).unwrap() / star_positions.len() as f32;
-    
-    // Create one large semi-transparent sprite covering the entire polygon area
-    // First find the bounding box
-    let mut min_x = f32::MAX;
-    let mut max_x = f32::MIN;
-    let mut min_y = f32::MAX;
-    let mut max_y = f32::MIN;
-    
+
+    // Create a Mesh2d following the exact pattern from mesh2d_manual.rs
+    let mut constellation_mesh = Mesh::new(
+        PrimitiveTopology::TriangleList,
+        RenderAssetUsages::RENDER_WORLD,
+    );
+
+    // Calculate centroid for the center vertex (like vertex 0 in mesh2d_manual)
+    let centroid =
+        star_positions.iter().copied().reduce(|a, b| a + b).unwrap() / star_positions.len() as f32;
+
+    // Build vertex positions array exactly like mesh2d_manual:
+    // First vertex (index 0) is the center/centroid
+    // Following vertices are the star positions in order
+    let mut v_pos = vec![[centroid.x, centroid.y, 0.0]];
     for pos in &star_positions {
-        min_x = min_x.min(pos.x);
-        max_x = max_x.max(pos.x);
-        min_y = min_y.min(pos.y);
-        max_y = max_y.max(pos.y);
+        v_pos.push([pos.x, pos.y, 0.0]);
     }
     
-    let center = Vec2::new((min_x + max_x) / 2.0, (min_y + max_y) / 2.0);
-    let size = Vec2::new(max_x - min_x, max_y - min_y);
+    // Set the position attribute
+    constellation_mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, v_pos.clone());
     
-    // Spawn a semi-transparent sprite covering the constellation area
+    // Set vertex colors - use constellation color with some variation
+    let base_color = constellation.color;
+    // Convert Color to LinearRgba
+    let base_rgba = LinearRgba::from(base_color);
+    
+    let mut v_color: Vec<u32> = vec![
+        // Center vertex gets a more transparent version
+        LinearRgba::new(
+            base_rgba.red,
+            base_rgba.green, 
+            base_rgba.blue,
+            0.3
+        ).as_u32()
+    ];
+    
+    // Star vertices get slightly brighter colors
+    for _ in &star_positions {
+        v_color.push(
+            LinearRgba::new(
+                (base_rgba.red * 1.2).min(1.0),
+                (base_rgba.green * 1.2).min(1.0),
+                (base_rgba.blue * 1.2).min(1.0),
+                0.5
+            ).as_u32()
+        );
+    }
+    
+    constellation_mesh.insert_attribute(
+        MeshVertexAttribute::new("Vertex_Color", 1, VertexFormat::Uint32),
+        v_color,
+    );
+
+    // Create indices for triangle fan, exactly like mesh2d_manual:
+    // First triangle: 0, 1, last_vertex
+    // Then each subsequent triangle: 0, i, i-1
+    let num_vertices = star_positions.len() as u32;
+    let mut indices = vec![0, 1, num_vertices];
+    for i in 2..=num_vertices {
+        indices.extend_from_slice(&[0, i, i - 1]);
+    }
+    constellation_mesh.insert_indices(Indices::U32(indices));
+
+    // Spawn the constellation mesh entity
+    // Using MeshHandle component to hold the mesh
+    let mesh_handle = meshes.add(constellation_mesh);
     commands.spawn((
-        Sprite {
-            color: constellation.color.with_alpha(0.10),
-            custom_size: Some(size * 0.8), // Slightly smaller for better visual
-            ..default()
+        ColoredMesh2d,
+        MeshHandle(mesh_handle),
+        Transform::from_translation(Vec3::new(0.0, 0.0, -1.0)), // Behind other elements
+        ConstellationMarker {
+            id: constellation.id,
         },
-        Transform::from_translation(center.extend(-1.0)), // Behind everything
-        ConstellationMarker { id: constellation.id },
     ));
-    
+
     // Draw glowing colored lines connecting the stars in the exact cycle order
     for i in 0..constellation.stars.len() {
         let from_entity = constellation.stars[i];
         let to_entity = constellation.stars[(i + 1) % constellation.stars.len()];
-        
-        if let (Ok((_, _, from_transform)), Ok((_, _, to_transform))) = (
-            stars_query.get(from_entity),
-            stars_query.get(to_entity)
-        ) {
+
+        if let (Ok((_, _, from_transform)), Ok((_, _, to_transform))) =
+            (stars_query.get(from_entity), stars_query.get(to_entity))
+        {
             let start = Vec2::new(from_transform.translation.x, from_transform.translation.y);
             let end = Vec2::new(to_transform.translation.x, to_transform.translation.y);
-            
+
             let midpoint = (start + end) / 2.0;
             let diff = end - start;
             let distance = diff.length();
             let angle = diff.y.atan2(diff.x);
-            
+
             // Create multiple layers for glow effect
             // Outer glow - very wide and transparent
             commands.spawn((
@@ -2151,9 +2237,11 @@ fn create_constellation_visual(
                 Visibility::default(),
                 InheritedVisibility::default(),
                 ViewVisibility::default(),
-                ConstellationMarker { id: constellation.id },
+                ConstellationMarker {
+                    id: constellation.id,
+                },
             ));
-            
+
             // Middle glow
             commands.spawn((
                 Sprite {
@@ -2170,9 +2258,11 @@ fn create_constellation_visual(
                 Visibility::default(),
                 InheritedVisibility::default(),
                 ViewVisibility::default(),
-                ConstellationMarker { id: constellation.id },
+                ConstellationMarker {
+                    id: constellation.id,
+                },
             ));
-            
+
             // Core line - bright and solid
             commands.spawn((
                 Sprite {
@@ -2189,7 +2279,9 @@ fn create_constellation_visual(
                 Visibility::default(),
                 InheritedVisibility::default(),
                 ViewVisibility::default(),
-                ConstellationMarker { id: constellation.id },
+                ConstellationMarker {
+                    id: constellation.id,
+                },
             ));
         }
     }

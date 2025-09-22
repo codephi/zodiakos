@@ -106,8 +106,9 @@ fn star(
     commands.spawn((
         // We use a marker component to identify the custom colored meshes
         ColoredMesh2d,
-        // The `Handle<Mesh>` needs to be wrapped in a `Mesh2d` for 2D rendering
-        Mesh2d(meshes.add(star)),
+        // Add the mesh handle wrapped in component
+        MeshHandle(meshes.add(star)),
+        Transform::default(),
     ));
 
     commands.spawn(Camera2d);
@@ -116,6 +117,10 @@ fn star(
 /// A marker component for colored 2d meshes
 #[derive(Component, Default)]
 pub struct ColoredMesh2d;
+
+/// Component to hold the mesh handle
+#[derive(Component)]
+pub struct MeshHandle(pub Handle<Mesh>);
 
 /// Custom pipeline for 2d meshes with vertex colors
 #[derive(Resource)]
@@ -304,7 +309,7 @@ impl Plugin for ColoredMesh2dPlugin {
             .init_resource::<RenderColoredMesh2dInstances>()
             .add_systems(
                 ExtractSchedule,
-                extract_colored_mesh2d.after(extract_mesh2d),
+                extract_colored_mesh2d,
             )
             .add_systems(Render, queue_colored_mesh2d.in_set(RenderSet::QueueMeshes));
     }
@@ -330,7 +335,7 @@ pub fn extract_colored_mesh2d(
                 RenderEntity,
                 &ViewVisibility,
                 &GlobalTransform,
-                &Mesh2d,
+                &MeshHandle,
             ),
             With<ColoredMesh2d>,
         >,
@@ -338,7 +343,7 @@ pub fn extract_colored_mesh2d(
     mut render_mesh_instances: ResMut<RenderColoredMesh2dInstances>,
 ) {
     let mut values = Vec::with_capacity(*previous_len);
-    for (entity, render_entity, view_visibility, transform, handle) in &query {
+    for (entity, render_entity, view_visibility, transform, mesh_handle) in &query {
         if !view_visibility.get() {
             continue;
         }
@@ -352,7 +357,7 @@ pub fn extract_colored_mesh2d(
         render_mesh_instances.insert(
             entity.into(),
             RenderMesh2dInstance {
-                mesh_asset_id: handle.0.id(),
+                mesh_asset_id: mesh_handle.0.id(),
                 transforms,
                 material_bind_group_id: Material2dBindGroupId::default(),
                 automatic_batching: false,
@@ -390,9 +395,8 @@ pub fn queue_colored_mesh2d(
         let mesh_key = Mesh2dPipelineKey::from_msaa_samples(msaa.samples())
             | Mesh2dPipelineKey::from_hdr(view.hdr);
 
-        // Queue all entities visible to that view
-        for (render_entity, visible_entity) in visible_entities.iter::<Mesh2d>() {
-            if let Some(mesh_instance) = render_mesh_instances.get(visible_entity) {
+        // Queue all entities with ColoredMesh2d in our instances
+        for (entity_id, mesh_instance) in render_mesh_instances.iter() {
                 let mesh2d_handle = mesh_instance.mesh_asset_id;
                 let mesh2d_transforms = &mesh_instance.transforms;
                 // Get our specialized pipeline
@@ -406,8 +410,11 @@ pub fn queue_colored_mesh2d(
                     pipelines.specialize(&pipeline_cache, &colored_mesh2d_pipeline, mesh2d_key);
 
                 let mesh_z = mesh2d_transforms.world_from_local.translation.z;
+                // Create a fake visible entity for now
+                let visible_entity = Entity::from_raw(0).into();
+                let render_entity = Entity::from_raw(1);
                 transparent_phase.add(Transparent2d {
-                    entity: (*render_entity, *visible_entity),
+                    entity: (render_entity, visible_entity),
                     draw_function: draw_colored_mesh2d,
                     pipeline: pipeline_id,
                     // The 2d render items are sorted according to their z value before rendering,
@@ -419,7 +426,6 @@ pub fn queue_colored_mesh2d(
                     extracted_index: usize::MAX,
                     indexed: mesh.indexed(),
                 });
-            }
         }
     }
 }
