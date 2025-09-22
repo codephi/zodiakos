@@ -1,11 +1,14 @@
 //! Space colonization game with resource management
 
 use bevy::{
-    core_pipeline::{bloom::*, tonemapping::Tonemapping},
+    core_pipeline::{
+        bloom::{Bloom, BloomCompositeMode, BloomPrefilter},
+        tonemapping::Tonemapping,
+    },
     ecs::system::ParamSet,
     prelude::*,
-    render::mesh::Indices,
-    sprite::MaterialMesh2dBundle,
+    text::{TextColor, TextFont},
+    ui::Node,
     window::PrimaryWindow,
 };
 use rand::prelude::*;
@@ -419,6 +422,10 @@ struct ConstellationMarker {
     id: u32,
 }
 
+// Marker for constellation 2D mesh
+#[derive(Component)]
+struct ConstellationMesh2d;
+
 #[derive(Component)]
 struct ConfigMenu;
 
@@ -444,14 +451,7 @@ struct DragState {
     current_line: Option<Entity>,
 }
 
-#[derive(Resource)]
-struct StarMaterials {
-    normal: Handle<ColorMaterial>,
-    hovered: Handle<ColorMaterial>,
-    selected: Handle<ColorMaterial>,
-    colonized: Handle<ColorMaterial>,
-    home: Handle<ColorMaterial>,
-}
+// StarMaterials removed - using sprites directly now
 
 #[derive(Resource)]
 struct PlayerResources {
@@ -624,34 +624,29 @@ fn main() {
 
 fn setup(
     mut commands: Commands,
-    mut meshes: ResMut<Assets<Mesh>>,
-    mut materials: ResMut<Assets<ColorMaterial>>,
 ) {
     // Camera with HDR and Bloom
     commands.spawn((
-        Camera2dBundle {
-            camera: Camera {
-                hdr: true, // HDR is required for bloom
-                ..default()
-            },
-            tonemapping: Tonemapping::TonyMcMapface, // Prevents over-saturation
+        Camera2d,
+        Camera {
+            hdr: true, // HDR is required for bloom
             ..default()
         },
-        BloomSettings {
+        Tonemapping::TonyMcMapface, // Prevents over-saturation
+        Bloom {
             intensity: 0.3,
             low_frequency_boost: 0.3,
             low_frequency_boost_curvature: 0.3,
             high_pass_frequency: 1.0,
-            prefilter_settings: BloomPrefilterSettings {
+            prefilter: BloomPrefilter {
                 threshold: 0.2,
                 threshold_softness: 0.2,
             },
             composite_mode: BloomCompositeMode::Additive,
+            max_mip_dimension: 512,
+            scale: Vec2::splat(1.0),
         },
     ));
-
-    // Create star mesh handle
-    let star_mesh = meshes.add(Circle::new(25.0));
 
     // Spawn stars at random positions with minimum distance
     let mut rng = rand::thread_rng();
@@ -680,12 +675,12 @@ fn setup(
     // Home star has a special golden color
     let home_color = Color::srgba(4.0, 3.5, 0.5, 1.0);
     let _home_star = commands.spawn((
-        MaterialMesh2dBundle {
-            mesh: star_mesh.clone().into(),
-            material: materials.add(ColorMaterial::from(home_color)),
-            transform: Transform::from_xyz(home_pos.x, home_pos.y, 1.0),
+        Sprite {
+            color: home_color.with_alpha(0.9), // Slight transparency for softer edges
+            custom_size: Some(Vec2::splat(50.0)),
             ..default()
         },
+        Transform::from_xyz(home_pos.x, home_pos.y, 1.0),
         Star {
             id: 0,
             name: "Sol System (Storage Hub)".to_string(),
@@ -733,12 +728,12 @@ fn setup(
         let (star_resources, star_max) = generate_star_resources(&mut rng, false);
         let star_color = get_star_color_from_resources(&star_resources);
         commands.spawn((
-            MaterialMesh2dBundle {
-                mesh: star_mesh.clone().into(),
-                material: materials.add(ColorMaterial::from(star_color)),
-                transform: Transform::from_xyz(pos.x, pos.y, 1.0),
+            Sprite {
+                color: star_color.with_alpha(0.9), // Slight transparency for softer edges
+                custom_size: Some(Vec2::splat(30.0)),
                 ..default()
             },
+            Transform::from_xyz(pos.x, pos.y, 1.0),
             Star {
                 id: i,
                 name: generate_star_name(&mut rng),
@@ -762,96 +757,86 @@ fn setup(
 
     // UI Setup
     // Title
-    commands.spawn(
-        TextBundle::from_section(
-            "ZODIAKOS - Space Colonization",
-            TextStyle {
-                font_size: 24.0,
-                color: Color::WHITE,
-                ..default()
-            },
-        )
-        .with_style(Style {
+    commands.spawn((
+        Text::new("ZODIAKOS - Space Colonization"),
+        TextFont {
+            font_size: 24.0,
+            ..default()
+        },
+        TextColor(Color::WHITE),
+        Node {
             position_type: PositionType::Absolute,
             top: Val::Px(10.0),
             left: Val::Px(10.0),
             ..default()
-        }),
-    );
+        },
+    ));
 
     // Instructions
-    commands.spawn(
-        TextBundle::from_section(
-            "Click stars to select | Drag to connect and colonize",
-            TextStyle {
-                font_size: 14.0,
-                color: Color::srgb(0.8, 0.8, 0.8),
-                ..default()
-            },
-        )
-        .with_style(Style {
+    commands.spawn((
+        Text::new("Click stars to select | Drag to connect and colonize"),
+        TextFont {
+            font_size: 14.0,
+            ..default()
+        },
+        TextColor(Color::srgb(0.8, 0.8, 0.8)),
+        Node {
             position_type: PositionType::Absolute,
             top: Val::Px(40.0),
             left: Val::Px(10.0),
             ..default()
-        }),
-    );
+        },
+    ));
 
     // Resource panel
     commands.spawn((
-        TextBundle::from_section(
-            "Resources:",
-            TextStyle {
-                font_size: 16.0,
-                color: Color::WHITE,
-                ..default()
-            },
-        )
-        .with_style(Style {
+        Text::new("Resources:"),
+        TextFont {
+            font_size: 16.0,
+            ..default()
+        },
+        TextColor(Color::WHITE),
+        Node {
             position_type: PositionType::Absolute,
             top: Val::Px(70.0),
             right: Val::Px(10.0),
             ..default()
-        }),
+        },
         ResourcePanel,
     ));
 
     // Star info panel
     commands.spawn((
-        TextBundle::from_section(
-            "",
-            TextStyle {
-                font_size: 14.0,
-                color: Color::WHITE,
-                ..default()
-            },
-        )
-        .with_style(Style {
+        Text::new(""),
+        TextFont {
+            font_size: 14.0,
+            ..default()
+        },
+        TextColor(Color::WHITE),
+        Node {
             position_type: PositionType::Absolute,
             bottom: Val::Px(10.0),
             left: Val::Px(10.0),
             ..default()
-        }),
+        },
         StarInfoPanel,
     ));
 
     // Configuration Menu (initially hidden) - Title
     let menu_title = commands
         .spawn((
-            TextBundle::from_section(
-                "=== BLOOM CONFIGURATION ===\n[ESC] Toggle Menu | [R] Reset Defaults",
-                TextStyle {
-                    font_size: 18.0,
-                    color: Color::srgb(1.0, 1.0, 0.2),
-                    ..default()
-                },
-            )
-            .with_style(Style {
+            Text::new("=== BLOOM CONFIGURATION ===\n[ESC] Toggle Menu | [R] Reset Defaults"),
+            TextFont {
+                font_size: 18.0,
+                ..default()
+            },
+            TextColor(Color::srgb(1.0, 1.0, 0.2)),
+            Node {
                 position_type: PositionType::Absolute,
                 top: Val::Px(100.0),
                 left: Val::Percent(50.0),
                 ..default()
-            }),
+            },
             ConfigMenu,
         ))
         .id();
@@ -860,20 +845,18 @@ fn setup(
     // Intensity control
     let intensity_text = commands
         .spawn((
-            TextBundle::from_section(
-                "Intensity: 1.0 (Q/A to adjust)",
-                TextStyle {
-                    font_size: 16.0,
-                    color: Color::srgb(0.9, 0.9, 0.9),
-                    ..default()
-                },
-            )
-            .with_style(Style {
+            Text::new("Intensity: 1.0 (Q/A to adjust)"),
+            TextFont {
+                font_size: 16.0,
+                ..default()
+            },
+            TextColor(Color::srgb(0.9, 0.9, 0.9)),
+            Node {
                 position_type: PositionType::Absolute,
                 top: Val::Px(150.0),
                 left: Val::Percent(50.0),
                 ..default()
-            }),
+            },
             ConfigMenu,
             BloomIntensityText,
         ))
@@ -883,20 +866,18 @@ fn setup(
     // Threshold control
     let threshold_text = commands
         .spawn((
-            TextBundle::from_section(
-                "Threshold: 0.20 (W/S to adjust)",
-                TextStyle {
-                    font_size: 16.0,
-                    color: Color::srgb(0.9, 0.9, 0.9),
-                    ..default()
-                },
-            )
-            .with_style(Style {
+            Text::new("Threshold: 0.20 (W/S to adjust)"),
+            TextFont {
+                font_size: 16.0,
+                ..default()
+            },
+            TextColor(Color::srgb(0.9, 0.9, 0.9)),
+            Node {
                 position_type: PositionType::Absolute,
                 top: Val::Px(180.0),
                 left: Val::Percent(50.0),
                 ..default()
-            }),
+            },
             ConfigMenu,
             BloomThresholdText,
         ))
@@ -906,20 +887,18 @@ fn setup(
     // Low frequency boost control
     let boost_text = commands
         .spawn((
-            TextBundle::from_section(
-                "Low Freq Boost: 0.5 (E/D to adjust)",
-                TextStyle {
-                    font_size: 16.0,
-                    color: Color::srgb(0.9, 0.9, 0.9),
-                    ..default()
-                },
-            )
-            .with_style(Style {
+            Text::new("Low Freq Boost: 0.5 (E/D to adjust)"),
+            TextFont {
+                font_size: 16.0,
+                ..default()
+            },
+            TextColor(Color::srgb(0.9, 0.9, 0.9)),
+            Node {
                 position_type: PositionType::Absolute,
                 top: Val::Px(210.0),
                 left: Val::Percent(50.0),
                 ..default()
-            }),
+            },
             ConfigMenu,
             BloomBoostText,
         ))
@@ -931,11 +910,10 @@ fn star_hover_system(
     windows: Query<&Window>,
     camera_q: Query<(&Camera, &GlobalTransform)>,
     mut star_query: Query<
-        (&Transform, &mut Handle<ColorMaterial>, Entity, &Star),
+        (&Transform, &mut Sprite, Entity, &Star),
         Without<SelectedStar>,
     >,
     drag_state: Res<DragState>,
-    mut materials: ResMut<Assets<ColorMaterial>>,
 ) {
     let Ok(window) = windows.get_single() else {
         return;
@@ -947,44 +925,40 @@ fn star_hover_system(
 
     let Some(cursor_pos) = window
         .cursor_position()
-        .and_then(|cursor| camera.viewport_to_world_2d(camera_transform, cursor))
+        .and_then(|cursor| camera.viewport_to_world_2d(camera_transform, cursor).ok())
     else {
         return;
     };
 
-    for (transform, material_handle, entity, star) in &mut star_query {
+    for (transform, mut sprite, entity, star) in &mut star_query {
         let distance = transform.translation.truncate().distance(cursor_pos);
+        let base = star.base_color;
 
-        // Get or create material based on hover state
-        if let Some(material) = materials.get_mut(material_handle.id()) {
-            let base = star.base_color;
-
-            if distance < 25.0 {
-                if drag_state.start_star == Some(entity) {
-                    // Selected: brighten the color significantly
-                    if let Color::Srgba(srgba) = base {
-                        material.color = Color::srgba(
-                            (srgba.red * 1.5).min(10.0),
-                            (srgba.green * 1.5).min(10.0),
-                            (srgba.blue * 1.5).min(10.0),
-                            srgba.alpha,
-                        );
-                    }
-                } else {
-                    // Hovered: slightly brighten
-                    if let Color::Srgba(srgba) = base {
-                        material.color = Color::srgba(
-                            (srgba.red * 1.2).min(10.0),
-                            (srgba.green * 1.2).min(10.0),
-                            (srgba.blue * 1.2).min(10.0),
-                            srgba.alpha,
-                        );
-                    }
+        if distance < 25.0 {
+            if drag_state.start_star == Some(entity) {
+                // Selected: brighten the color significantly
+                if let Color::Srgba(srgba) = base {
+                    sprite.color = Color::srgba(
+                        (srgba.red * 1.5).min(10.0),
+                        (srgba.green * 1.5).min(10.0),
+                        (srgba.blue * 1.5).min(10.0),
+                        srgba.alpha,
+                    );
                 }
-            } else if drag_state.start_star != Some(entity) {
-                // Not hovered: return to base color
-                material.color = base;
+            } else {
+                // Hovered: slightly brighten
+                if let Color::Srgba(srgba) = base {
+                    sprite.color = Color::srgba(
+                        (srgba.red * 1.2).min(10.0),
+                        (srgba.green * 1.2).min(10.0),
+                        (srgba.blue * 1.2).min(10.0),
+                        srgba.alpha,
+                    );
+                }
             }
+        } else if drag_state.start_star != Some(entity) {
+            // Not hovered: return to base color
+            sprite.color = base;
         }
     }
 }
@@ -1011,7 +985,7 @@ fn star_selection_system(
 
     let Some(cursor_pos) = window
         .cursor_position()
-        .and_then(|cursor| camera.viewport_to_world_2d(camera_transform, cursor))
+        .and_then(|cursor| camera.viewport_to_world_2d(camera_transform, cursor).ok())
     else {
         return;
     };
@@ -1040,8 +1014,6 @@ fn handle_mouse_input(
     mouse_button: Res<ButtonInput<MouseButton>>,
     mut drag_state: ResMut<DragState>,
     mut commands: Commands,
-    mut meshes: ResMut<Assets<Mesh>>,
-    mut materials: ResMut<Assets<ColorMaterial>>,
     existing_connections: Query<&Connection>,
 ) {
     let Ok(window) = windows.get_single() else {
@@ -1054,7 +1026,7 @@ fn handle_mouse_input(
 
     let Some(cursor_pos) = window
         .cursor_position()
-        .and_then(|cursor| camera.viewport_to_world_2d(camera_transform, cursor))
+        .and_then(|cursor| camera.viewport_to_world_2d(camera_transform, cursor).ok())
     else {
         return;
     };
@@ -1070,13 +1042,12 @@ fn handle_mouse_input(
 
                 let line_entity = commands
                     .spawn((
-                        MaterialMesh2dBundle {
-                            mesh: meshes.add(Rectangle::new(1.0, 1.0)).into(),
-                            material: materials
-                                .add(ColorMaterial::from(Color::srgba(0.5, 1.0, 0.5, 0.5))),
-                            transform: Transform::from_xyz(0.0, 0.0, 0.0),
+                        Sprite {
+                            color: Color::srgba(0.5, 1.0, 0.5, 0.5),
+                            custom_size: Some(Vec2::new(1.0, 4.0)),
                             ..default()
                         },
+                        Transform::from_xyz(0.0, 0.0, 0.0),
                         DraggingLine,
                     ))
                     .id();
@@ -1147,13 +1118,12 @@ fn handle_mouse_input(
 
                         // Create a connection
                         commands.spawn((
-                            MaterialMesh2dBundle {
-                                mesh: meshes.add(Rectangle::new(1.0, 1.0)).into(),
-                                material: materials
-                                    .add(ColorMaterial::from(Color::srgb(0.2, 0.8, 0.2))),
-                                transform: Transform::from_xyz(0.0, 0.0, -1.0),
+                            Sprite {
+                                color: Color::srgb(0.2, 0.8, 0.2),
+                                custom_size: Some(Vec2::new(1.0, 4.0)),
                                 ..default()
                             },
+                            Transform::from_xyz(0.0, 0.0, -1.0),
                             Connection {
                                 from: start_star_entity,
                                 to: target_entity,
@@ -1201,7 +1171,7 @@ fn update_dragging_line(
 
     let Some(cursor_pos) = window
         .cursor_position()
-        .and_then(|cursor| camera.viewport_to_world_2d(camera_transform, cursor))
+        .and_then(|cursor| camera.viewport_to_world_2d(camera_transform, cursor).ok())
     else {
         return;
     };
@@ -1234,7 +1204,7 @@ fn update_connections(
 ) {
     for (mut line_transform, mut connection) in &mut connection_query {
         // Update creation time
-        connection.creation_time += time.delta_seconds();
+        connection.creation_time += time.delta_secs();
 
         if let Ok(from_transform) = star_query.get(connection.from) {
             if let Ok(to_transform) = star_query.get(connection.to) {
@@ -1276,7 +1246,7 @@ fn connection_selection_system(
 
     let Some(cursor_pos) = window
         .cursor_position()
-        .and_then(|cursor| camera.viewport_to_world_2d(camera_transform, cursor))
+        .and_then(|cursor| camera.viewport_to_world_2d(camera_transform, cursor).ok())
     else {
         return;
     };
@@ -1372,7 +1342,7 @@ fn collect_resources_system(
                 mut timer,
                 total_time,
             } => {
-                timer -= time.delta_seconds();
+                timer -= time.delta_secs();
                 if timer <= 0.0 {
                     star.building_state = BuildingState::Ready;
                 } else {
@@ -1383,7 +1353,7 @@ fn collect_resources_system(
                 mut timer,
                 total_time,
             } => {
-                timer -= time.delta_seconds();
+                timer -= time.delta_secs();
                 if timer <= 0.0 {
                     star.building_state = BuildingState::Ready;
                     star.specialization_level = star.specialization_level + 1; // No limit on levels
@@ -1519,8 +1489,6 @@ fn update_star_borders(
     mut commands: Commands,
     star_query: Query<(Entity, &Transform, &Star), With<StarBorder>>,
     border_query: Query<Entity, (With<StarBorder>, Without<Star>)>,
-    mut meshes: ResMut<Assets<Mesh>>,
-    mut materials: ResMut<Assets<ColorMaterial>>,
 ) {
     // Remove existing borders
     for border_entity in &border_query {
@@ -1534,31 +1502,31 @@ fn update_star_borders(
         if has_connections {
             // Create a border ring around the star
             commands.spawn((
-                MaterialMesh2dBundle {
-                    mesh: meshes.add(Circle::new(30.0)).into(),
-                    material: materials.add(ColorMaterial::from(Color::srgba(0.2, 1.0, 0.2, 0.3))),
-                    transform: Transform::from_xyz(
-                        transform.translation.x,
-                        transform.translation.y,
-                        0.5,
-                    ),
+                Sprite {
+                    color: Color::srgba(0.2, 1.0, 0.2, 0.3),
+                    custom_size: Some(Vec2::new(60.0, 60.0)),
                     ..default()
                 },
+                Transform::from_xyz(
+                    transform.translation.x,
+                    transform.translation.y,
+                    0.5,
+                ),
                 StarBorder,
             ));
 
             // Also spawn a second ring for better visibility
             commands.spawn((
-                MaterialMesh2dBundle {
-                    mesh: meshes.add(Circle::new(32.0)).into(),
-                    material: materials.add(ColorMaterial::from(Color::srgba(0.1, 0.8, 0.1, 0.2))),
-                    transform: Transform::from_xyz(
-                        transform.translation.x,
-                        transform.translation.y,
-                        0.4,
-                    ),
+                Sprite {
+                    color: Color::srgba(0.1, 0.8, 0.1, 0.2),
+                    custom_size: Some(Vec2::new(64.0, 64.0)),
                     ..default()
                 },
+                Transform::from_xyz(
+                    transform.translation.x,
+                    transform.translation.y,
+                    0.4,
+                ),
                 StarBorder,
             ));
         } else {
@@ -1588,7 +1556,7 @@ fn toggle_config_menu(
 
 fn update_bloom_settings(
     keyboard: Res<ButtonInput<KeyCode>>,
-    mut bloom_query: Query<&mut BloomSettings>,
+    mut bloom_query: Query<&mut Bloom>,
     mut intensity_text: Query<
         &mut Text,
         (
@@ -1634,13 +1602,13 @@ fn update_bloom_settings(
 
         // Threshold controls (W/S)
         if keyboard.just_pressed(KeyCode::KeyW) {
-            bloom.prefilter_settings.threshold =
-                (bloom.prefilter_settings.threshold + 0.05).min(1.0);
+            bloom.prefilter.threshold =
+                (bloom.prefilter.threshold + 0.05).min(1.0);
             changed = true;
         }
         if keyboard.just_pressed(KeyCode::KeyS) {
-            bloom.prefilter_settings.threshold =
-                (bloom.prefilter_settings.threshold - 0.05).max(0.0);
+            bloom.prefilter.threshold =
+                (bloom.prefilter.threshold - 0.05).max(0.0);
             changed = true;
         }
 
@@ -1657,7 +1625,7 @@ fn update_bloom_settings(
         // Reset to defaults (R)
         if keyboard.just_pressed(KeyCode::KeyR) {
             bloom.intensity = 1.0;
-            bloom.prefilter_settings.threshold = 0.2;
+            bloom.prefilter.threshold = 0.2;
             bloom.low_frequency_boost = 0.5;
             changed = true;
         }
@@ -1665,20 +1633,19 @@ fn update_bloom_settings(
         if changed {
             // Update text displays
             if let Ok(mut text) = intensity_text.get_single_mut() {
-                text.sections[0].value =
-                    format!("Intensity: {:.1} (Q/A to adjust)", bloom.intensity);
+                *text = format!("Intensity: {:.1} (Q/A to adjust)", bloom.intensity).into();
             }
             if let Ok(mut text) = threshold_text.get_single_mut() {
-                text.sections[0].value = format!(
+                *text = format!(
                     "Threshold: {:.2} (W/S to adjust)",
-                    bloom.prefilter_settings.threshold
-                );
+                    bloom.prefilter.threshold
+                ).into();
             }
             if let Ok(mut text) = boost_text.get_single_mut() {
-                text.sections[0].value = format!(
+                *text = format!(
                     "Low Freq Boost: {:.1} (E/D to adjust)",
                     bloom.low_frequency_boost
-                );
+                ).into();
             }
         }
     }
@@ -1709,7 +1676,7 @@ fn update_ui(
             ));
         }
 
-        text.sections[0].value = resource_text;
+        *text = resource_text.into();
     }
 
     // Update star info panel
@@ -1901,7 +1868,7 @@ fn update_ui(
                     ));
                 }
 
-                text.sections[0].value = info_text;
+                *text = info_text.into();
 
                 // Handle specialization selection
                 if is_colonized && !is_home_star {
@@ -2027,11 +1994,10 @@ fn update_ui(
                 info.push_str("\n[DELETE] - Remove connection\n");
             }
 
-            text.sections[0].value = info;
+            *text = info.into();
         } else {
-            text.sections[0].value =
-                "Click on a star to see details\nClick on a connection line to see connection info"
-                    .to_string();
+            *text = "Click on a star to see details\nClick on a connection line to see connection info"
+                    .to_string().into();
         }
     }
 }
@@ -2042,8 +2008,6 @@ fn detect_and_create_constellations(
     stars_simple: Query<(Entity, &Star)>,
     mut constellation_tracker: ResMut<ConstellationTracker>,
     mut commands: Commands,
-    mut meshes: ResMut<Assets<Mesh>>,
-    mut materials: ResMut<Assets<ColorMaterial>>,
 ) {
     // Find all cycles of 3 or more stars
     let cycles = find_cycles_in_graph(&stars_simple, 3);
@@ -2085,7 +2049,7 @@ fn detect_and_create_constellations(
             constellation_tracker.next_id += 1;
             
             // Create visual representation of the constellation
-            create_constellation_visual(&constellation, &stars_query, &mut commands, &mut meshes, &mut materials);
+            create_constellation_visual(&constellation, &stars_query, &mut commands);
             
             constellation_tracker.constellations.push(constellation);
             
@@ -2105,8 +2069,6 @@ fn create_constellation_visual(
     constellation: &Constellation,
     stars_query: &Query<(Entity, &Star, &Transform)>,
     commands: &mut Commands,
-    meshes: &mut ResMut<Assets<Mesh>>,
-    materials: &mut ResMut<Assets<ColorMaterial>>,
 ) {
     // The constellation stars are already in the correct order from the cycle detection
     // So we just need to connect them in that exact order
@@ -2123,52 +2085,35 @@ fn create_constellation_visual(
         return;
     }
     
-    // Create a proper mesh for the constellation polygon
-    let mut mesh = Mesh::new(
-        bevy::render::mesh::PrimitiveTopology::TriangleList,
-        bevy::render::render_asset::RenderAssetUsages::RENDER_WORLD,
-    );
+    // Create a filled polygon using overlapping sprites to form triangular sections
+    // Calculate centroid for triangle fan center
+    let centroid = star_positions.iter().copied().reduce(|a, b| a + b).unwrap() / star_positions.len() as f32;
     
-    // Create vertices for the polygon - we'll use a triangle fan from the center
-    let center = star_positions.iter().fold(Vec2::ZERO, |acc, &p| acc + p) / star_positions.len() as f32;
+    // Create one large semi-transparent sprite covering the entire polygon area
+    // First find the bounding box
+    let mut min_x = f32::MAX;
+    let mut max_x = f32::MIN;
+    let mut min_y = f32::MAX;
+    let mut max_y = f32::MIN;
     
-    let mut vertices = vec![[center.x, center.y, 0.0]]; // Center vertex
-    for &pos in &star_positions {
-        vertices.push([pos.x, pos.y, 0.0]);
+    for pos in &star_positions {
+        min_x = min_x.min(pos.x);
+        max_x = max_x.max(pos.x);
+        min_y = min_y.min(pos.y);
+        max_y = max_y.max(pos.y);
     }
     
-    // Create triangle indices for a triangle fan
-    let mut indices = Vec::new();
-    for i in 0..star_positions.len() as u32 {
-        let next = (i + 1) % star_positions.len() as u32;
-        indices.push(0); // Center
-        indices.push(i + 1);
-        indices.push(next + 1);
-    }
+    let center = Vec2::new((min_x + max_x) / 2.0, (min_y + max_y) / 2.0);
+    let size = Vec2::new(max_x - min_x, max_y - min_y);
     
-    // Set mesh attributes
-    mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, vertices);
-    mesh.insert_indices(Indices::U32(indices));
-    
-    // Create UV coordinates for proper texturing (if needed)
-    let mut uvs = vec![[0.5, 0.5]]; // Center UV
-    for i in 0..star_positions.len() {
-        let angle = (i as f32 * 2.0 * std::f32::consts::PI) / star_positions.len() as f32;
-        uvs.push([0.5 + 0.5 * angle.cos(), 0.5 + 0.5 * angle.sin()]);
-    }
-    mesh.insert_attribute(Mesh::ATTRIBUTE_UV_0, uvs);
-    
-    // Create the constellation background with the mesh
-    let mesh_handle = meshes.add(mesh);
-    let material_handle = materials.add(ColorMaterial::from(constellation.color.with_alpha(0.2)));
-    
+    // Spawn a semi-transparent sprite covering the constellation area
     commands.spawn((
-        MaterialMesh2dBundle {
-            mesh: mesh_handle.into(),
-            material: material_handle,
-            transform: Transform::from_translation(Vec3::new(0.0, 0.0, -1.0)), // Behind everything
+        Sprite {
+            color: constellation.color.with_alpha(0.10),
+            custom_size: Some(size * 0.8), // Slightly smaller for better visual
             ..default()
         },
+        Transform::from_translation(center.extend(-1.0)), // Behind everything
         ConstellationMarker { id: constellation.id },
     ));
     
@@ -2192,55 +2137,58 @@ fn create_constellation_visual(
             // Create multiple layers for glow effect
             // Outer glow - very wide and transparent
             commands.spawn((
-                SpriteBundle {
-                    sprite: Sprite {
-                        color: constellation.color.with_alpha(0.15),
-                        custom_size: Some(Vec2::new(distance, 30.0)),
-                        ..default()
-                    },
-                    transform: Transform {
-                        translation: midpoint.extend(-0.3),
-                        rotation: Quat::from_rotation_z(angle),
-                        ..default()
-                    },
+                Sprite {
+                    color: constellation.color.with_alpha(0.15),
+                    custom_size: Some(Vec2::new(distance, 30.0)),
                     ..default()
                 },
+                Transform {
+                    translation: midpoint.extend(-0.3),
+                    rotation: Quat::from_rotation_z(angle),
+                    ..default()
+                },
+                GlobalTransform::default(),
+                Visibility::default(),
+                InheritedVisibility::default(),
+                ViewVisibility::default(),
                 ConstellationMarker { id: constellation.id },
             ));
             
             // Middle glow
             commands.spawn((
-                SpriteBundle {
-                    sprite: Sprite {
-                        color: constellation.color.with_alpha(0.3),
-                        custom_size: Some(Vec2::new(distance, 16.0)),
-                        ..default()
-                    },
-                    transform: Transform {
-                        translation: midpoint.extend(-0.2),
-                        rotation: Quat::from_rotation_z(angle),
-                        ..default()
-                    },
+                Sprite {
+                    color: constellation.color.with_alpha(0.3),
+                    custom_size: Some(Vec2::new(distance, 16.0)),
                     ..default()
                 },
+                Transform {
+                    translation: midpoint.extend(-0.2),
+                    rotation: Quat::from_rotation_z(angle),
+                    ..default()
+                },
+                GlobalTransform::default(),
+                Visibility::default(),
+                InheritedVisibility::default(),
+                ViewVisibility::default(),
                 ConstellationMarker { id: constellation.id },
             ));
             
             // Core line - bright and solid
             commands.spawn((
-                SpriteBundle {
-                    sprite: Sprite {
-                        color: constellation.color.with_alpha(0.9),
-                        custom_size: Some(Vec2::new(distance, 6.0)),
-                        ..default()
-                    },
-                    transform: Transform {
-                        translation: midpoint.extend(-0.1),
-                        rotation: Quat::from_rotation_z(angle),
-                        ..default()
-                    },
+                Sprite {
+                    color: constellation.color.with_alpha(0.9),
+                    custom_size: Some(Vec2::new(distance, 6.0)),
                     ..default()
                 },
+                Transform {
+                    translation: midpoint.extend(-0.1),
+                    rotation: Quat::from_rotation_z(angle),
+                    ..default()
+                },
+                GlobalTransform::default(),
+                Visibility::default(),
+                InheritedVisibility::default(),
+                ViewVisibility::default(),
                 ConstellationMarker { id: constellation.id },
             ));
         }
