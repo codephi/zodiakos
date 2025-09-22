@@ -5,6 +5,7 @@ use bevy::{
     sprite::MaterialMesh2dBundle,
     window::PrimaryWindow,
     ecs::system::ParamSet,
+    core_pipeline::bloom::*,
 };
 use rand::prelude::*;
 use std::collections::HashMap;
@@ -233,6 +234,7 @@ struct Star {
     building_state: BuildingState,  // Current construction/upgrade state
     connections_from: Vec<Entity>,  // List of stars connected TO this star
     connections_to: Vec<Entity>,    // List of stars this star connects TO
+    base_color: Color,              // Base color based on resources
 }
 
 #[derive(Component)]
@@ -319,6 +321,34 @@ fn generate_star_name(rng: &mut ThreadRng) -> String {
     format!("{} {}", prefix, suffix)
 }
 
+// Get star color based on dominant resource type
+fn get_star_color_from_resources(resources: &HashMap<ResourceType, f32>) -> Color {
+    // Find the dominant resource type
+    let mut dominant_resource = None;
+    let mut max_amount = 0.0;
+    
+    for (resource_type, amount) in resources {
+        if *amount > max_amount {
+            max_amount = *amount;
+            dominant_resource = Some(*resource_type);
+        }
+    }
+    
+    // Return color based on dominant resource with HDR values for bloom
+    match dominant_resource {
+        Some(ResourceType::Water) => Color::srgba(0.3, 0.6, 4.0, 1.0),      // Deep blue
+        Some(ResourceType::Oxygen) => Color::srgba(0.7, 3.0, 4.0, 1.0),     // Cyan
+        Some(ResourceType::Food) => Color::srgba(0.3, 4.0, 0.3, 1.0),       // Green
+        Some(ResourceType::Iron) => Color::srgba(2.5, 2.5, 3.0, 1.0),       // Silver-gray
+        Some(ResourceType::Copper) => Color::srgba(4.0, 2.0, 0.8, 1.0),     // Orange-copper
+        Some(ResourceType::Silicon) => Color::srgba(3.0, 3.0, 4.0, 1.0),    // Light blue-white
+        Some(ResourceType::Uranium) => Color::srgba(0.5, 4.0, 0.5, 1.0),    // Radioactive green
+        Some(ResourceType::Helium3) => Color::srgba(4.0, 3.0, 0.0, 1.0),    // Yellow-gold
+        Some(ResourceType::EnergyCrystal) => Color::srgba(4.0, 0.5, 4.0, 1.0), // Purple
+        None => Color::srgba(3.0, 3.0, 3.0, 1.0),                           // Default white
+    }
+}
+
 // Generate random resources for a star
 fn generate_star_resources(rng: &mut ThreadRng, is_home: bool) -> (HashMap<ResourceType, f32>, HashMap<ResourceType, f32>) {
     let mut resources = HashMap::new();
@@ -389,17 +419,21 @@ fn setup(
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<ColorMaterial>>,
 ) {
-    // Camera
-    commands.spawn(Camera2dBundle::default());
-
-    // Store materials for stars
-    let star_materials = StarMaterials {
-        normal: materials.add(ColorMaterial::from(Color::srgb(0.8, 0.8, 0.8))),
-        hovered: materials.add(ColorMaterial::from(Color::srgb(1.0, 1.0, 0.8))),
-        selected: materials.add(ColorMaterial::from(Color::srgb(1.0, 1.0, 0.5))),
-        colonized: materials.add(ColorMaterial::from(Color::srgb(0.5, 0.8, 1.0))),
-        home: materials.add(ColorMaterial::from(Color::srgb(0.2, 1.0, 0.2))),
-    };
+    // Camera with HDR and Bloom
+    commands.spawn((
+        Camera2dBundle::default(),
+        BloomSettings {
+            intensity: 1.0,
+            low_frequency_boost: 0.5,
+            low_frequency_boost_curvature: 0.5,
+            high_pass_frequency: 1.0,
+            prefilter_settings: BloomPrefilterSettings {
+                threshold: 0.2,
+                threshold_softness: 0.2,
+            },
+            composite_mode: BloomCompositeMode::Additive,
+        },
+    ));
 
     // Create star mesh handle
     let star_mesh = meshes.add(Circle::new(25.0));
@@ -417,17 +451,19 @@ fn setup(
     positions.push(home_pos);
     
     let (home_resources, home_max) = generate_star_resources(&mut rng, true);
+    // Home star has a special golden color
+    let home_color = Color::srgba(4.0, 3.5, 0.5, 1.0);
     let _home_star = commands.spawn((
         MaterialMesh2dBundle {
             mesh: star_mesh.clone().into(),
-            material: star_materials.home.clone(),
+            material: materials.add(ColorMaterial::from(home_color)),
             transform: Transform::from_xyz(home_pos.x, home_pos.y, 1.0),
             ..default()
         },
         Star {
             id: 0,
             name: "Sol System".to_string(),
-            resources: home_resources,
+            resources: home_resources.clone(),
             max_resources: home_max,
             production_rate: 2.0,
             is_colonized: true,
@@ -438,6 +474,7 @@ fn setup(
             building_state: BuildingState::Ready,
             connections_from: vec![],
             connections_to: vec![],
+            base_color: home_color,
         },
     )).id();
     
@@ -466,10 +503,11 @@ fn setup(
         positions.push(pos);
         
         let (star_resources, star_max) = generate_star_resources(&mut rng, false);
+        let star_color = get_star_color_from_resources(&star_resources);
         commands.spawn((
             MaterialMesh2dBundle {
                 mesh: star_mesh.clone().into(),
-                material: star_materials.normal.clone(),
+                material: materials.add(ColorMaterial::from(star_color)),
                 transform: Transform::from_xyz(pos.x, pos.y, 1.0),
                 ..default()
             },
@@ -487,11 +525,10 @@ fn setup(
                 building_state: BuildingState::Ready,
                 connections_from: vec![],
                 connections_to: vec![],
+                base_color: star_color,
             },
         ));
     }
-
-    commands.insert_resource(star_materials);
 
     // UI Setup
     // Title
@@ -570,11 +607,11 @@ fn setup(
 }
 
 fn star_hover_system(
-    windows: Query<&Window, With<PrimaryWindow>>,
+    windows: Query<&Window>,
     camera_q: Query<(&Camera, &GlobalTransform)>,
     mut star_query: Query<(&Transform, &mut Handle<ColorMaterial>, Entity, &Star), Without<SelectedStar>>,
-    star_materials: Res<StarMaterials>,
     drag_state: Res<DragState>,
+    mut materials: ResMut<Assets<ColorMaterial>>,
 ) {
     let Ok(window) = windows.get_single() else {
         return;
@@ -590,22 +627,38 @@ fn star_hover_system(
         return;
     };
 
-    for (transform, mut material, entity, star) in &mut star_query {
+    for (transform, material_handle, entity, star) in &mut star_query {
         let distance = transform.translation.truncate().distance(cursor_pos);
         
-        if distance < 25.0 {
-            if drag_state.start_star == Some(entity) {
-                *material = star_materials.selected.clone();
-            } else {
-                *material = star_materials.hovered.clone();
-            }
-        } else if drag_state.start_star != Some(entity) {
-            if star.is_home_star {
-                *material = star_materials.home.clone();
-            } else if star.is_colonized {
-                *material = star_materials.colonized.clone();
-            } else {
-                *material = star_materials.normal.clone();
+        // Get or create material based on hover state
+        if let Some(material) = materials.get_mut(material_handle.id()) {
+            let base = star.base_color;
+            
+            if distance < 25.0 {
+                if drag_state.start_star == Some(entity) {
+                    // Selected: brighten the color significantly
+                    if let Color::Srgba(srgba) = base {
+                        material.color = Color::srgba(
+                            (srgba.red * 1.5).min(10.0),
+                            (srgba.green * 1.5).min(10.0),
+                            (srgba.blue * 1.5).min(10.0),
+                            srgba.alpha
+                        );
+                    }
+                } else {
+                    // Hovered: slightly brighten
+                    if let Color::Srgba(srgba) = base {
+                        material.color = Color::srgba(
+                            (srgba.red * 1.2).min(10.0),
+                            (srgba.green * 1.2).min(10.0),
+                            (srgba.blue * 1.2).min(10.0),
+                            srgba.alpha
+                        );
+                    }
+                }
+            } else if drag_state.start_star != Some(entity) {
+                // Not hovered: return to base color
+                material.color = base;
             }
         }
     }
