@@ -218,6 +218,66 @@ fn max_connections_for_level(level: u8) -> u32 {
     fibonacci(level)
 }
 
+// Calculate route distance to nearest storage hub through connection paths
+// This measures the number of connection hops, not physical distance
+// A star can be physically close but have a long route distance if not directly connected
+fn calculate_distance_to_nearest_storage(
+    star_entity: Entity,
+    star_query: &Query<&Star>,
+    visited: &mut Vec<Entity>,
+) -> Option<u32> {
+    // Check if already visited to avoid cycles
+    if visited.contains(&star_entity) {
+        return None;
+    }
+    visited.push(star_entity);
+    
+    if let Ok(star) = star_query.get(star_entity) {
+        // If this star is a storage hub, route distance is 0
+        if star.is_storage_hub {
+            return Some(0);
+        }
+        
+        // Check all connection routes to find shortest path
+        let mut min_route_distance = None;
+        
+        // Check routes through incoming connections
+        for &connected_entity in &star.connections_from {
+            if let Some(dist) = calculate_distance_to_nearest_storage(connected_entity, star_query, visited) {
+                let route_dist = dist + 1; // Add 1 hop for this connection
+                min_route_distance = Some(min_route_distance.map_or(route_dist, |d: u32| d.min(route_dist)));
+            }
+        }
+        
+        // Check routes through outgoing connections
+        for &connected_entity in &star.connections_to {
+            if let Some(dist) = calculate_distance_to_nearest_storage(connected_entity, star_query, visited) {
+                let route_dist = dist + 1; // Add 1 hop for this connection
+                min_route_distance = Some(min_route_distance.map_or(route_dist, |d: u32| d.min(route_dist)));
+            }
+        }
+        
+        min_route_distance
+    } else {
+        None
+    }
+}
+
+// Calculate production efficiency based on route distance to storage hub
+// Stars need supply routes to maintain efficiency - the longer the route, the less efficient
+fn production_rate_modifier_from_distance(route_distance: Option<u32>) -> f32 {
+    match route_distance {
+        None => 0.1,    // No route to storage hub: 10% production (isolated)
+        Some(0) => 1.0, // Is a storage hub: 100% production
+        Some(1) => 0.9, // 1 connection hop: 90% production
+        Some(2) => 0.75, // 2 connection hops: 75% production
+        Some(3) => 0.6,  // 3 connection hops: 60% production
+        Some(4) => 0.45, // 4 connection hops: 45% production
+        Some(5) => 0.35, // 5 connection hops: 35% production
+        Some(d) => (0.3 / (d as f32 - 4.0)).max(0.1), // Longer routes: diminishing returns, min 10%
+    }
+}
+
 // Components
 #[derive(Component)]
 struct Star {
@@ -225,16 +285,18 @@ struct Star {
     name: String,
     resources: HashMap<ResourceType, f32>,
     max_resources: HashMap<ResourceType, f32>,
-    production_rate: f32, // Resources per second
+    production_rate: f32,  // Resources per second
     is_colonized: bool,
     is_home_star: bool,
     specialization: Specialization, // None = extraction; other = specialization (stops extraction)
-    specialization_level: u8,       // Level (no limit, follows Fibonacci for connections)
+    specialization_level: u8,      // Level (no limit, follows Fibonacci for connections)
     units: Vec<Unit>,               // Units produced if specialized
     building_state: BuildingState,  // Current construction/upgrade state
     connections_from: Vec<Entity>,  // List of stars connected TO this star
     connections_to: Vec<Entity>,    // List of stars this star connects TO
     base_color: Color,              // Base color based on resources
+    storage_capacity: HashMap<ResourceType, f32>, // Storage capacity if it's a storage hub
+    is_storage_hub: bool,          // Whether this star is a storage hub
 }
 
 #[derive(Component)]
@@ -513,34 +575,45 @@ fn setup(
     positions.push(home_pos);
 
     let (home_resources, home_max) = generate_star_resources(&mut rng, true);
+    
+    // Calculate storage capacity (10% of max capacity for each resource)
+    let mut storage_capacity = HashMap::new();
+    let mut storage_resources = HashMap::new();
+    for (resource_type, max_value) in &home_max {
+        let capacity = max_value * 10.0; // Storage hub has 10x the capacity
+        storage_capacity.insert(*resource_type, capacity);
+        // Start with 10% of storage capacity filled
+        storage_resources.insert(*resource_type, capacity * 0.1);
+    }
+    
     // Home star has a special golden color
     let home_color = Color::srgba(4.0, 3.5, 0.5, 1.0);
-    let _home_star = commands
-        .spawn((
-            MaterialMesh2dBundle {
-                mesh: star_mesh.clone().into(),
-                material: materials.add(ColorMaterial::from(home_color)),
-                transform: Transform::from_xyz(home_pos.x, home_pos.y, 1.0),
-                ..default()
-            },
-            Star {
-                id: 0,
-                name: "Sol System".to_string(),
-                resources: home_resources.clone(),
-                max_resources: home_max,
-                production_rate: 2.0,
-                is_colonized: true,
-                is_home_star: true,
-                specialization: Specialization::None,
-                specialization_level: 1,
-                units: vec![],
-                building_state: BuildingState::Ready,
-                connections_from: vec![],
-                connections_to: vec![],
-                base_color: home_color,
-            },
-        ))
-        .id();
+    let _home_star = commands.spawn((
+        MaterialMesh2dBundle {
+            mesh: star_mesh.clone().into(),
+            material: materials.add(ColorMaterial::from(home_color)),
+            transform: Transform::from_xyz(home_pos.x, home_pos.y, 1.0),
+            ..default()
+        },
+        Star {
+            id: 0,
+            name: "Sol System (Storage Hub)".to_string(),
+            resources: storage_resources, // Use storage resources instead
+            max_resources: home_max.clone(),
+            production_rate: 2.0,
+            is_colonized: true,
+            is_home_star: true,
+            specialization: Specialization::Storage, // Set as Storage hub
+            specialization_level: 1,
+            units: vec![],
+            building_state: BuildingState::Ready,
+            connections_from: vec![],
+            connections_to: vec![],
+            base_color: home_color,
+            storage_capacity,
+            is_storage_hub: true,
+        },
+    )).id();
 
     // Generate other stars
     for i in 1..num_stars {
@@ -590,6 +663,8 @@ fn setup(
                 connections_from: vec![],
                 connections_to: vec![],
                 base_color: star_color,
+                storage_capacity: HashMap::new(),
+                is_storage_hub: false,
             },
         ));
     }
@@ -1192,11 +1267,14 @@ fn connection_selection_system(
 fn collect_resources_system(
     time: Res<Time>,
     mut connection_query: Query<&mut Connection>,
-    mut star_query: Query<&mut Star>,
+    mut star_queries: ParamSet<(
+        Query<&mut Star>,
+        Query<&Star>,
+    )>,
     mut player_resources: ResMut<PlayerResources>,
 ) {
     // First, update building timers
-    for mut star in &mut star_query {
+    for mut star in &mut star_queries.p0() {
         match star.building_state {
             BuildingState::Building {
                 mut timer,
@@ -1230,24 +1308,29 @@ fn collect_resources_system(
             connection.collection_timer.tick(time.delta());
 
             if connection.collection_timer.just_finished() {
-                // Collect resources from the connected star
-                if let Ok(mut star) = star_query.get_mut(connection.to) {
+                // First calculate distance to nearest storage hub
+                let mut visited = Vec::new();
+                let distance = {
+                    let star_readonly = star_queries.p1();
+                    calculate_distance_to_nearest_storage(connection.to, &star_readonly, &mut visited)
+                };
+                let distance_modifier = production_rate_modifier_from_distance(distance);
+                
+                // Then collect resources from the connected star
+                if let Ok(mut star) = star_queries.p0().get_mut(connection.to) {
                     // Only produce if building is ready
                     if star.building_state != BuildingState::Ready {
                         continue;
                     }
 
-                    // Only collect resources if star is not specialized
-                    if star.specialization == Specialization::None {
-                        let production_rate = star.production_rate;
+                    // Only collect resources if star is not specialized for something other than storage
+                    if star.specialization == Specialization::None || star.specialization == Specialization::Storage {
+                        let production_rate = star.production_rate * distance_modifier;
                         for (resource_type, amount) in star.resources.iter_mut() {
                             let collection_amount = (production_rate * 5.0).min(*amount);
                             if collection_amount > 0.0 {
                                 *amount -= collection_amount;
-                                *player_resources
-                                    .resources
-                                    .entry(*resource_type)
-                                    .or_insert(0.0) += collection_amount;
+                                *player_resources.resources.entry(*resource_type).or_insert(0.0) += collection_amount;
                             }
                         }
                     } else {
@@ -1650,8 +1733,31 @@ fn update_ui(
                     connections_from, connections_to, max_conn
                 ));
 
+                // Show route distance to storage hub and production efficiency
+                let mut visited = Vec::new();
+                let route_distance = calculate_distance_to_nearest_storage(selected_entity, &star_queries.p0(), &mut visited);
+                let efficiency_modifier = production_rate_modifier_from_distance(route_distance);
+                
+                if let Some(hops) = route_distance {
+                    info_text.push_str(&format!("Supply Route Distance: {} connection(s)\n", hops));
+                    info_text.push_str(&format!("Route Status: {}\n", 
+                        match hops {
+                            0 => "Storage Hub (Direct Supply)",
+                            1 => "Adjacent to Storage (Optimal)",
+                            2..=3 => "Short Route (Good)",
+                            4..=5 => "Long Route (Suboptimal)",
+                            _ => "Very Long Route (Poor)",
+                        }
+                    ));
+                } else {
+                    info_text.push_str("Supply Route: ⚠️ NO CONNECTION TO STORAGE!\n");
+                    info_text.push_str("Status: Isolated (Critical)\n");
+                }
+
                 if specialization == Specialization::None {
-                    info_text.push_str(&format!("Production Rate: {:.1}/s\n", production_rate));
+                    info_text.push_str(&format!("Base Production Rate: {:.1}/s\n", production_rate));
+                    info_text.push_str(&format!("Effective Production: {:.1}/s ({:.0}% efficiency)\n", 
+                        production_rate * efficiency_modifier, efficiency_modifier * 100.0));
                 } else {
                     info_text.push_str("Production: SPECIALIZED\n");
 
@@ -1722,6 +1828,20 @@ fn update_ui(
                                 selected_star.specialization = spec;
                                 selected_star.specialization_level = 1; // Reset level when changing
                                 selected_star.units.clear();
+                                
+                                // If becoming a storage hub, set up storage capacity
+                                if spec == Specialization::Storage {
+                                    selected_star.is_storage_hub = true;
+                                    let max_resources_copy = selected_star.max_resources.clone();
+                                    for (resource_type, max_value) in &max_resources_copy {
+                                        let capacity = max_value * 10.0; // Storage hub has 10x capacity
+                                        selected_star.storage_capacity.insert(*resource_type, capacity);
+                                    }
+                                } else {
+                                    selected_star.is_storage_hub = false;
+                                    selected_star.storage_capacity.clear();
+                                }
+                                
                                 let build_time = spec.build_time();
                                 selected_star.building_state = BuildingState::Building {
                                     timer: build_time,
