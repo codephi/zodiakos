@@ -38,7 +38,7 @@ fn main() {
         .run();
 }
 
-fn star(
+pub fn star(
     mut commands: Commands,
     // We will add a new Mesh for the star being created
     mut meshes: ResMut<Assets<Mesh>>,
@@ -307,10 +307,7 @@ impl Plugin for ColoredMesh2dPlugin {
             .add_render_command::<Transparent2d, DrawColoredMesh2d>()
             .init_resource::<SpecializedRenderPipelines<ColoredMesh2dPipeline>>()
             .init_resource::<RenderColoredMesh2dInstances>()
-            .add_systems(
-                ExtractSchedule,
-                extract_colored_mesh2d,
-            )
+            .add_systems(ExtractSchedule, extract_colored_mesh2d)
             .add_systems(Render, queue_colored_mesh2d.in_set(RenderSet::QueueMeshes));
     }
 
@@ -397,35 +394,35 @@ pub fn queue_colored_mesh2d(
 
         // Queue all entities with ColoredMesh2d in our instances
         for (entity_id, mesh_instance) in render_mesh_instances.iter() {
-                let mesh2d_handle = mesh_instance.mesh_asset_id;
-                let mesh2d_transforms = &mesh_instance.transforms;
-                // Get our specialized pipeline
-                let mut mesh2d_key = mesh_key;
-                let Some(mesh) = render_meshes.get(mesh2d_handle) else {
-                    continue;
-                };
-                mesh2d_key |= Mesh2dPipelineKey::from_primitive_topology(mesh.primitive_topology());
+            let mesh2d_handle = mesh_instance.mesh_asset_id;
+            let mesh2d_transforms = &mesh_instance.transforms;
+            // Get our specialized pipeline
+            let mut mesh2d_key = mesh_key;
+            let Some(mesh) = render_meshes.get(mesh2d_handle) else {
+                continue;
+            };
+            mesh2d_key |= Mesh2dPipelineKey::from_primitive_topology(mesh.primitive_topology());
 
-                let pipeline_id =
-                    pipelines.specialize(&pipeline_cache, &colored_mesh2d_pipeline, mesh2d_key);
+            let pipeline_id =
+                pipelines.specialize(&pipeline_cache, &colored_mesh2d_pipeline, mesh2d_key);
 
-                let mesh_z = mesh2d_transforms.world_from_local.translation.z;
-                // Create a fake visible entity for now
-                let visible_entity = Entity::from_raw(0).into();
-                let render_entity = Entity::from_raw(1);
-                transparent_phase.add(Transparent2d {
-                    entity: (render_entity, visible_entity),
-                    draw_function: draw_colored_mesh2d,
-                    pipeline: pipeline_id,
-                    // The 2d render items are sorted according to their z value before rendering,
-                    // in order to get correct transparency
-                    sort_key: FloatOrd(mesh_z),
-                    // This material is not batched
-                    batch_range: 0..1,
-                    extra_index: PhaseItemExtraIndex::None,
-                    extracted_index: usize::MAX,
-                    indexed: mesh.indexed(),
-                });
+            let mesh_z = mesh2d_transforms.world_from_local.translation.z;
+            // Create a fake visible entity for now
+            let visible_entity = Entity::from_raw(0).into();
+            let render_entity = Entity::from_raw(1);
+            transparent_phase.add(Transparent2d {
+                entity: (render_entity, visible_entity),
+                draw_function: draw_colored_mesh2d,
+                pipeline: pipeline_id,
+                // The 2d render items are sorted according to their z value before rendering,
+                // in order to get correct transparency
+                sort_key: FloatOrd(mesh_z),
+                // This material is not batched
+                batch_range: 0..1,
+                extra_index: PhaseItemExtraIndex::None,
+                extracted_index: usize::MAX,
+                indexed: mesh.indexed(),
+            });
         }
     }
 }

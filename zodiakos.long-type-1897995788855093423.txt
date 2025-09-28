@@ -1,1 +1,0 @@
-(&bevy::prelude::Transform, &mut bevy::prelude::Handle<bevy::prelude::ColorMaterial>, bevy::prelude::Entity, &Star)

@@ -1,5 +1,4 @@
-//! Space colonization game with resource management
-
+mod mesh2d_manual;
 use bevy::{
     core_pipeline::{
         bloom::{Bloom, BloomCompositeMode, BloomPrefilter},
@@ -12,15 +11,11 @@ use bevy::{
         render_asset::RenderAssetUsages,
         render_resource::{PrimitiveTopology, VertexFormat},
     },
-    text::{TextColor, TextFont},
-    ui::Node,
     window::PrimaryWindow,
 };
 use rand::prelude::*;
 use std::collections::HashMap;
 
-// Import the ColoredMesh2d components from mesh2d_manual module
-mod mesh2d_manual;
 use mesh2d_manual::{ColoredMesh2d, ColoredMesh2dPlugin, MeshHandle};
 
 // Specialization types for stars
@@ -451,7 +446,6 @@ struct Constellation {
 struct ConstellationMarker {
     id: u32,
 }
-
 
 #[derive(Component)]
 struct ConfigMenu;
@@ -939,11 +933,11 @@ fn star_hover_system(
     mut star_query: Query<(&Transform, &mut Sprite, Entity, &Star), Without<SelectedStar>>,
     drag_state: Res<DragState>,
 ) {
-    let Ok(window) = windows.get_single() else {
+    let Ok(window) = windows.single() else {
         return;
     };
 
-    let Ok((camera, camera_transform)) = camera_q.get_single() else {
+    let Ok((camera, camera_transform)) = camera_q.single() else {
         return;
     };
 
@@ -999,11 +993,11 @@ fn star_selection_system(
         return;
     }
 
-    let Ok(window) = windows.get_single() else {
+    let Ok(window) = windows.single() else {
         return;
     };
 
-    let Ok((camera, camera_transform)) = camera_q.get_single() else {
+    let Ok((camera, camera_transform)) = camera_q.single() else {
         return;
     };
 
@@ -1040,11 +1034,11 @@ fn handle_mouse_input(
     mut commands: Commands,
     existing_connections: Query<&Connection>,
 ) {
-    let Ok(window) = windows.get_single() else {
+    let Ok(window) = windows.single() else {
         return;
     };
 
-    let Ok((camera, camera_transform)) = camera_q.get_single() else {
+    let Ok((camera, camera_transform)) = camera_q.single() else {
         return;
     };
 
@@ -1185,11 +1179,11 @@ fn update_dragging_line(
         return;
     }
 
-    let Ok(window) = windows.get_single() else {
+    let Ok(window) = windows.single() else {
         return;
     };
 
-    let Ok((camera, camera_transform)) = camera_q.get_single() else {
+    let Ok((camera, camera_transform)) = camera_q.single() else {
         return;
     };
 
@@ -1260,11 +1254,11 @@ fn connection_selection_system(
     mut stars: Query<&mut Star>,
     selected_connection: Option<Res<SelectedConnection>>,
 ) {
-    let Ok(window) = windows.get_single() else {
+    let Ok(window) = windows.single() else {
         return;
     };
 
-    let Ok((camera, camera_transform)) = camera_q.get_single() else {
+    let Ok((camera, camera_transform)) = camera_q.single() else {
         return;
     };
 
@@ -1654,22 +1648,20 @@ fn update_bloom_settings(
 
         if changed {
             // Update text displays
-            if let Ok(mut text) = intensity_text.get_single_mut() {
-                *text = format!("Intensity: {:.1} (Q/A to adjust)", bloom.intensity).into();
+            if let Ok(mut text) = intensity_text.single_mut() {
+                *text = Text::new(format!("Intensity: {:.1} (Q/A to adjust)", bloom.intensity));
             }
-            if let Ok(mut text) = threshold_text.get_single_mut() {
-                *text = format!(
+            if let Ok(mut text) = threshold_text.single_mut() {
+                *text = Text::new(format!(
                     "Threshold: {:.2} (W/S to adjust)",
                     bloom.prefilter.threshold
-                )
-                .into();
+                ));
             }
-            if let Ok(mut text) = boost_text.get_single_mut() {
-                *text = format!(
+            if let Ok(mut text) = boost_text.single_mut() {
+                *text = Text::new(format!(
                     "Low Freq Boost: {:.1} (E/D to adjust)",
                     bloom.low_frequency_boost
-                )
-                .into();
+                ));
             }
         }
     }
@@ -1688,7 +1680,7 @@ fn update_ui(
     constellation_tracker: Res<ConstellationTracker>,
 ) {
     // Update resource panel
-    if let Ok(mut text) = resource_panel_query.get_single_mut() {
+    if let Ok(mut text) = resource_panel_query.single_mut() {
         let mut resource_text = "=== RESOURCES ===\n".to_string();
 
         for (resource_type, amount) in &player_resources.resources {
@@ -1700,11 +1692,11 @@ fn update_ui(
             ));
         }
 
-        *text = resource_text.into();
+        *text = Text::new(resource_text);
     }
 
     // Update star info panel
-    if let Ok(mut text) = star_info_query.get_single_mut() {
+    if let Ok(mut text) = star_info_query.single_mut() {
         if let Some(selected_entity) = game_state.selected_star {
             // First read the star data
             let star_data = star_queries.p0().get(selected_entity).ok().map(|star| {
@@ -1902,7 +1894,7 @@ fn update_ui(
                     ));
                 }
 
-                *text = info_text.into();
+                *text = Text::new(info_text);
 
                 // Handle specialization selection
                 if is_colonized && !is_home_star {
@@ -2031,12 +2023,11 @@ fn update_ui(
                 info.push_str("\n[DELETE] - Remove connection\n");
             }
 
-            *text = info.into();
+            *text = Text::new(info);
         } else {
-            *text =
-                "Click on a star to see details\nClick on a connection line to see connection info"
-                    .to_string()
-                    .into();
+            *text = Text::new(
+                "Click on a star to see details\nClick on a connection line to see connection info",
+            );
         }
     }
 }
@@ -2146,25 +2137,20 @@ fn create_constellation_visual(
     for pos in &star_positions {
         v_pos.push([pos.x, pos.y, 0.0]);
     }
-    
+
     // Set the position attribute
     constellation_mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, v_pos.clone());
-    
+
     // Set vertex colors - use constellation color with some variation
     let base_color = constellation.color;
     // Convert Color to LinearRgba
     let base_rgba = LinearRgba::from(base_color);
-    
+
     let mut v_color: Vec<u32> = vec![
         // Center vertex gets a more transparent version
-        LinearRgba::new(
-            base_rgba.red,
-            base_rgba.green, 
-            base_rgba.blue,
-            0.3
-        ).as_u32()
+        LinearRgba::new(base_rgba.red, base_rgba.green, base_rgba.blue, 0.3).as_u32(),
     ];
-    
+
     // Star vertices get slightly brighter colors
     for _ in &star_positions {
         v_color.push(
@@ -2172,11 +2158,12 @@ fn create_constellation_visual(
                 (base_rgba.red * 1.2).min(1.0),
                 (base_rgba.green * 1.2).min(1.0),
                 (base_rgba.blue * 1.2).min(1.0),
-                0.5
-            ).as_u32()
+                0.5,
+            )
+            .as_u32(),
         );
     }
-    
+
     constellation_mesh.insert_attribute(
         MeshVertexAttribute::new("Vertex_Color", 1, VertexFormat::Uint32),
         v_color,
